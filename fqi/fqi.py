@@ -6,8 +6,16 @@ from mushroom_rl.utils.dataset import parse_dataset
 
 
 class BoostedFQI(BatchTD):
-    def __init__(self, mdp_info, policy, approximator, n_iterations,
-                 approximator_params=None, fit_params=None, quiet=False):
+    def __init__(
+        self,
+        mdp_info,
+        policy,
+        approximator,
+        n_iterations,
+        approximator_params=None,
+        fit_params=None,
+        quiet=False
+    ):
         self._n_iterations = n_iterations
         self._quiet = quiet
         self._curriculum_idx = None
@@ -59,8 +67,16 @@ class FQI(BatchTD):
 
     """
 
-    def __init__(self, mdp_info, policy, approximator, n_iterations,
-                 approximator_params=None, fit_params=None, quiet=False):
+    def __init__(
+        self,
+        mdp_info,
+        policy,
+        approximator,
+        n_iterations,
+        approximator_params=None,
+        fit_params=None,
+        quiet=False
+    ):
         """
         Constructor.
 
@@ -88,7 +104,7 @@ class FQI(BatchTD):
         state, action, reward, next_state, absorbing, _ = parse_dataset(x)
         for _ in trange(n_iter, dynamic_ncols=True, disable=self._quiet, leave=False):
             if self._target is None:
-                self._target = reward
+                self._target = reward  # Initialisation avec Q_0 = 0
             else:
                 q = self.approximator.predict(next_state)
                 if np.any(absorbing):

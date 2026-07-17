@@ -70,20 +70,28 @@ def experiment(exp_id, ms, boosted, iters_per_env):
     pi = EpsGreedy(epsilon=epsilon)
 
     # Approximator
-    approximator_params = dict(input_shape=mdps[0].info.observation_space.shape,
-                               n_actions=mdps[0].info.action_space.n,
-                               n_models=n_tasks if boosted else 1,
-                               n_estimators=50,
-                               min_samples_split=5,
-                               min_samples_leaf=2,
-                               random_state=seed)
+    approximator_params = dict(
+        input_shape=mdps[0].info.observation_space.shape,
+        n_actions=mdps[0].info.action_space.n,
+        n_models=n_tasks if boosted else 1,
+        n_estimators=50,
+        min_samples_split=5,
+        min_samples_leaf=2,
+        random_state=seed
+    )
     approximator_params['prediction'] = 'sum'
 
     algorithm_params = dict(n_iterations=1)
 
     # Agent
-    agent = alg(mdps[0].info, pi, FastExtraTreesActionRegressor, quiet=True, approximator_params=approximator_params,
-                **algorithm_params)
+    agent = alg(
+        mdps[0].info,
+        pi,
+        FastExtraTreesActionRegressor,
+        quiet=True,
+        approximator_params=approximator_params,
+        **algorithm_params
+    )
 
     js = list()
     diff_qs = list()

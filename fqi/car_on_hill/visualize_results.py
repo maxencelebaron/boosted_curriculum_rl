@@ -3,9 +3,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Rectangle
 
-plt.rc('text.latex', preamble=r'\usepackage{amsmath}')
+# plt.rc('text.latex', preamble=r'\usepackage{amsmath}')
 plt.rcParams.update({
-    "text.usetex": True,
+    "text.usetex": False,
     "font.family": "serif",
     "font.serif": ["Roman"],
 })

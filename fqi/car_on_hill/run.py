@@ -4,10 +4,12 @@ import pickle
 
 from joblib import Parallel, delayed
 from fqi.fast_extra_tress import FastExtraTreesActionRegressor
+from fqi.network_fqi import NeuralRegressor
 from tqdm import trange
 import numpy as np
 
 from fqi.fqi import BoostedFQI
+from fqi.neural_fqi import BoostedNeuralFQI, NeuralFQI
 from fqi.car_on_hill.solver import solve_car_on_hill
 
 from mushroom_rl.algorithms.value import FQI
@@ -18,12 +20,19 @@ from mushroom_rl.utils.dataset import compute_J
 from mushroom_rl.utils.parameters import Parameter
 
 
-def experiment(exp_id, ms, boosted, iters_per_env):
+def experiment(exp_id, ms, boosted, neural, iters_per_env):
     seed = 95 + exp_id
     np.random.seed(seed)
     print("Running with seed %d" % seed)
 
-    alg = BoostedFQI if boosted else FQI
+    if neural and boosted:
+        alg = BoostedNeuralFQI
+    elif neural:
+        alg = NeuralFQI
+    elif boosted:
+        alg = BoostedFQI
+    else:
+        alg = FQI
 
     logger = Logger(alg.__name__, results_dir=None)
     logger.strong_line()
@@ -70,16 +79,29 @@ def experiment(exp_id, ms, boosted, iters_per_env):
     pi = EpsGreedy(epsilon=epsilon)
 
     # Approximator
-    approximator_params = dict(
-        input_shape=mdps[0].info.observation_space.shape,
-        n_actions=mdps[0].info.action_space.n,
-        n_models=n_tasks if boosted else 1,
-        n_estimators=50,
-        min_samples_split=5,
-        min_samples_leaf=2,
-        random_state=seed
-    )
-    approximator_params['prediction'] = 'sum'
+    if neural:
+        approximator_cls = NeuralRegressor
+        approximator_params = dict(
+            input_shape=mdps[0].info.observation_space.shape,
+            n_actions=mdps[0].info.action_space.n,
+            output_shape=(mdps[0].info.action_space.n,),
+            n_models=n_tasks if boosted else 1,
+            prediction='sum',
+        )
+        fit_params = dict(lr=1e-4, n_epochs=30, batch_size=32)
+    else:
+        approximator_cls = FastExtraTreesActionRegressor
+        approximator_params = dict(
+            input_shape=mdps[0].info.observation_space.shape,
+            n_actions=mdps[0].info.action_space.n,
+            n_models=n_tasks if boosted else 1,
+            n_estimators=50,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            random_state=seed,
+            prediction='sum',
+        )
+        fit_params = {}
 
     algorithm_params = dict(n_iterations=1)
 
@@ -87,9 +109,10 @@ def experiment(exp_id, ms, boosted, iters_per_env):
     agent = alg(
         mdps[0].info,
         pi,
-        FastExtraTreesActionRegressor,
+        approximator_cls,
         quiet=True,
         approximator_params=approximator_params,
+        fit_params=fit_params,
         **algorithm_params
     )
 
@@ -140,6 +163,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--use-curriculum", action='store_true')
     parser.add_argument("--use-boosting", action='store_true')
+    parser.add_argument(
+        "--use-neural",
+        action='store_true',
+        help="Use neural network as the weak learner in boosting"
+    )
     parser.add_argument("--n-exp", type=int, default=20)
     parser.add_argument("--n-jobs", type=int, default=10)
     args = parser.parse_args()
@@ -156,14 +184,20 @@ if __name__ == '__main__':
             iters_per_env = 60
 
     out = Parallel(n_jobs=args.n_jobs)(
-        delayed(experiment)(exp_id, ms, args.use_boosting, iters_per_env) for exp_id in range(args.n_exp))
+        delayed(experiment)(exp_id, ms, args.use_boosting, args.use_neural, iters_per_env)
+        for exp_id in range(args.n_exp))
     Js = [o[0] for o in out]
     Qs = [o[1] for o in out]
 
     # Summary folder
-    alg = 'boosted' if args.use_boosting else 'no_boosted'
-    cur = 'curriculum' if args.use_curriculum else 'no_curriculum'
-    folder_name = './logs/' + alg + '_' + cur
+    if args.use_neural:
+        boost = 'boosted' if args.use_boosting else 'no_boosted'
+        cur = 'curriculum' if args.use_curriculum else 'no_curriculum'
+        folder_name = './logs/neural_' + boost + '_' + cur
+    else:
+        alg = 'boosted' if args.use_boosting else 'no_boosted'
+        cur = 'curriculum' if args.use_curriculum else 'no_curriculum'
+        folder_name = './logs/' + alg + '_' + cur
     pathlib.Path(folder_name).mkdir(parents=True)
     np.save(folder_name + '/J.npy', Js)
     np.save(folder_name + '/Q.npy', Qs)

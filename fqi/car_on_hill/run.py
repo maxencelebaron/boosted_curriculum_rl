@@ -88,7 +88,7 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env):
             n_models=n_tasks if boosted else 1,
             prediction='sum',
         )
-        fit_params = dict(lr=1e-4, n_epochs=30, batch_size=32)
+        fit_params = dict(lr=1e-4, n_epochs=30, batch_size=32, reinit=True)
     else:
         approximator_cls = FastExtraTreesActionRegressor
         approximator_params = dict(
@@ -198,7 +198,7 @@ if __name__ == '__main__':
         alg = 'boosted' if args.use_boosting else 'no_boosted'
         cur = 'curriculum' if args.use_curriculum else 'no_curriculum'
         folder_name = './logs/' + alg + '_' + cur
-    pathlib.Path(folder_name).mkdir(parents=True)
+    pathlib.Path(folder_name).mkdir(parents=True, exist_ok=True)
     np.save(folder_name + '/J.npy', Js)
     np.save(folder_name + '/Q.npy', Qs)
 

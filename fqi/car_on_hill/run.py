@@ -88,7 +88,12 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
             n_models=n_tasks if boosted else 1,
             prediction='sum',
         )
-        fit_params = dict(lr=1e-4, n_epochs=30, batch_size=32, reinit=True)
+        fit_params = dict(
+            lr=1e-3,
+            n_epochs=80,
+            batch_size=32,
+            reinit=True
+        )
     else:
         approximator_cls = FastExtraTreesActionRegressor
         approximator_params = dict(

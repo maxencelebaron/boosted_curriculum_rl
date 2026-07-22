@@ -20,7 +20,7 @@ from mushroom_rl.utils.dataset import compute_J
 from mushroom_rl.utils.parameters import Parameter
 
 
-def experiment(exp_id, ms, boosted, neural, iters_per_env):
+def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
     seed = 95 + exp_id
     np.random.seed(seed)
     print("Running with seed %d" % seed)
@@ -118,6 +118,7 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env):
 
     js = list()
     diff_qs = list()
+    all_losses = list() if (neural and monitor_loss) else None
     for i, mdp in enumerate(mdps):
         logger.info('TASK: %d\n-------' % i)
         if boosted:
@@ -146,6 +147,10 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env):
             # Train
             agent.fit(dataset)
 
+            if all_losses is not None:
+                regressor = agent.approximator[i].model if boosted else agent.approximator.model
+                all_losses.append(list(regressor.last_loss_history))
+
             # Test
             test_dataset = core.evaluate(initial_states=test_states, quiet=True)
 
@@ -156,7 +161,7 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env):
         js.append(j_task)
         diff_qs.append(diff_q_task)
 
-    return js, diff_qs
+    return js, diff_qs, all_losses
 
 
 if __name__ == '__main__':
@@ -170,6 +175,7 @@ if __name__ == '__main__':
     )
     parser.add_argument("--n-exp", type=int, default=20)
     parser.add_argument("--n-jobs", type=int, default=10)
+    parser.add_argument("--monitor-loss", action='store_true')
     args = parser.parse_args()
 
     if args.use_curriculum:
@@ -184,10 +190,18 @@ if __name__ == '__main__':
             iters_per_env = 60
 
     out = Parallel(n_jobs=args.n_jobs)(
-        delayed(experiment)(exp_id, ms, args.use_boosting, args.use_neural, iters_per_env)
+        delayed(experiment)(
+            exp_id,
+            ms,
+            args.use_boosting,
+            args.use_neural,
+            iters_per_env,
+            args.monitor_loss
+        )
         for exp_id in range(args.n_exp))
     Js = [o[0] for o in out]
     Qs = [o[1] for o in out]
+    Losses = [o[2] for o in out]
 
     # Summary folder
     if args.use_neural:
@@ -201,6 +215,8 @@ if __name__ == '__main__':
     pathlib.Path(folder_name).mkdir(parents=True, exist_ok=True)
     np.save(folder_name + '/J.npy', Js)
     np.save(folder_name + '/Q.npy', Qs)
+    if args.monitor_loss and args.use_neural:
+        np.save(folder_name + '/losses.npy', np.array(Losses, dtype=float))
 
     print('J: ', np.mean(Js, 0))
     print('Q diff: ', np.mean(Qs, 0))

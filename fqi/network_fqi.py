@@ -43,6 +43,7 @@ class NeuralRegressor():
         self._optimizer = None
         self._loss_fn = nn.MSELoss(reduction='sum')
         self._is_fitted = False
+        self.last_loss_history = []
 
     def predict(self, state, **kwargs):
         """Return Q-values for all actions, shape (N, n_actions)."""
@@ -87,6 +88,7 @@ class NeuralRegressor():
             shuffle=True
         )
         self._is_fitted = True
+        self.last_loss_history = []
         self._model.train()
         for epoch in range(n_epochs):
             epoch_loss = 0.
@@ -98,4 +100,6 @@ class NeuralRegressor():
                 loss.backward()
                 self._optimizer.step()
                 epoch_loss += loss.item()
-            print(f"  epoch {epoch+1}/{n_epochs}  loss={epoch_loss/len(loader):.6f}")
+            avg_loss = epoch_loss / len(loader)
+            self.last_loss_history.append(avg_loss)
+            print(f"  epoch {epoch+1}/{n_epochs}  loss={avg_loss:.6f}")

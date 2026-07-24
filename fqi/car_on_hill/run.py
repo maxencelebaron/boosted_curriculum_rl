@@ -130,6 +130,7 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
     js = list()
     diff_qs = list()
     all_losses = list() if (neural and monitor_loss) else None
+    all_q_errors = list() if (neural and monitor_loss) else None
     for i, mdp in enumerate(mdps):
         logger.info('TASK: %d\n-------' % i)
         if boosted:
@@ -156,12 +157,27 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
         # Loop
         for _ in trange(iters_per_env, dynamic_ncols=True, disable=False, leave=False):
             # Train
+            if all_q_errors is not None:
+                regressor = agent.approximator.model[i if boosted else 0]
+                q_epoch = []
+                def _make_q_cb(approx, states, actions, q_star, ens_idx):
+                    def _cb():
+                        qs = approx.predict(states, actions, idx=ens_idx)
+                        q_epoch.append(np.linalg.norm(qs - q_star, ord=1) / len(qs))
+                    return _cb
+                regressor.epoch_callback = _make_q_cb(
+                    agent.approximator, test_states, test_actions, test_q[i], idx)
+
             agent.fit(dataset)
 
             if all_losses is not None:
                 regressor = agent.approximator.model[i if boosted else 0]
                 # print(f"DEBUG: regressor type = {type(regressor)}, has last_loss_history = {hasattr(regressor, 'last_loss_history')}")
                 all_losses.append(list(regressor.last_loss_history))
+
+            if all_q_errors is not None:
+                regressor.epoch_callback = None
+                all_q_errors.append(q_epoch)
 
             # Test
             test_dataset = core.evaluate(initial_states=test_states, quiet=True)
@@ -173,7 +189,7 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
         js.append(j_task)
         diff_qs.append(diff_q_task)
 
-    return js, diff_qs, all_losses
+    return js, diff_qs, all_losses, all_q_errors
 
 
 if __name__ == '__main__':
@@ -214,6 +230,7 @@ if __name__ == '__main__':
     Js = [o[0] for o in out]
     Qs = [o[1] for o in out]
     Losses = [o[2] for o in out]
+    Q_errors = [o[3] for o in out]
 
     # Summary folder
     if args.use_neural:
@@ -229,6 +246,7 @@ if __name__ == '__main__':
     np.save(folder_name + '/Q.npy', Qs)
     if args.monitor_loss and args.use_neural:
         np.save(folder_name + '/losses.npy', np.array(Losses, dtype=float))
+        np.save(folder_name + '/q_errors_per_epoch.npy', np.array(Q_errors, dtype=float))
 
     print('J: ', np.mean(Js, 0))
     print('Q diff: ', np.mean(Qs, 0))

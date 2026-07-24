@@ -44,6 +44,7 @@ class NeuralRegressor():
         self._loss_fn = nn.MSELoss(reduction='sum')
         self._is_fitted = False
         self.last_loss_history = []
+        self.epoch_callback = None
 
     def predict(self, state, **kwargs):
         """Return Q-values for all actions, shape (N, n_actions)."""
@@ -66,7 +67,7 @@ class NeuralRegressor():
         **kwargs
     ):
         """
-        Train on (state, action, target-Q) triples.
+        Train on (state, action, target) triples.
         Loss is applied only to the output neuron of the taken action.
         """
         if reinit:
@@ -96,10 +97,14 @@ class NeuralRegressor():
                 self._optimizer.zero_grad()
                 q_pred = self._model(sb)                       # (batch, 2)
                 q_pred_a = q_pred[torch.arange(len(ab)), ab]  # (batch,)
+                # on choisit la sortie du réseau correspondant à l'action
+                # effectivement prise dans le dataset
                 loss = self._loss_fn(q_pred_a, tb)
                 loss.backward()
                 self._optimizer.step()
                 epoch_loss += loss.item()
             avg_loss = epoch_loss / len(loader)
             self.last_loss_history.append(avg_loss)
+            if self.epoch_callback is not None:
+                self.epoch_callback()
             print(f"  epoch {epoch+1}/{n_epochs}  loss={avg_loss:.6f}")

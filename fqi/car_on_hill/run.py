@@ -120,6 +120,12 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
         fit_params=fit_params,
         **algorithm_params
     )
+    # print(f"DEBUG INIT: type(agent.approximator) = {type(agent.approximator).__name__}")
+    # if hasattr(agent.approximator, '_models'):
+    #     print(f"DEBUG INIT: len(_models) = {len(agent.approximator._models)}")
+    #     print(f"DEBUG INIT: type(_models[0]) = {type(agent.approximator._models[0]).__name__}")
+    # print(f"approximator module: {type(agent.approximator).__module__}")
+    # print(f"approximator MRO: {type(agent.approximator).__mro__}")
 
     js = list()
     diff_qs = list()
@@ -154,6 +160,7 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
 
             if all_losses is not None:
                 regressor = agent.approximator.model[i if boosted else 0]
+                # print(f"DEBUG: regressor type = {type(regressor)}, has last_loss_history = {hasattr(regressor, 'last_loss_history')}")
                 all_losses.append(list(regressor.last_loss_history))
 
             # Test

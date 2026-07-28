@@ -239,7 +239,8 @@ if __name__ == '__main__':
     if args.use_neural:
         boost = 'boosted' if args.use_boosting else 'no_boosted'
         cur = 'curriculum' if args.use_curriculum else 'no_curriculum'
-        folder_name = f'./logs/neural_{boost}_{cur}_lr{fit_params["lr"]}_ep{fit_params["n_epochs"]}_bs{fit_params["batch_size"]}'
+        reinit = 'reinit' if fit_params['reinit'] else 'no_reinit'
+        folder_name = f'./logs/neural_{boost}_{cur}_lr{fit_params["lr"]}_ep{fit_params["n_epochs"]}_bs{fit_params["batch_size"]}_{reinit}'
     else:
         alg = 'boosted' if args.use_boosting else 'no_boosted'
         cur = 'curriculum' if args.use_curriculum else 'no_curriculum'

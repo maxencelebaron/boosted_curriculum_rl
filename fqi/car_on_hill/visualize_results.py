@@ -67,9 +67,72 @@ def visualize_evolution(path=None, residuals=False, fontsize=6, ticksize=6, axsi
         plt.savefig(path, bbox_inches="tight")
 
 
+def plot_lines_with_depth_std(ax, data, color):
+    # data shape: (n_exp, n_tasks, iters, 50)
+    mean_data = data.mean(axis=-1)  # (n_exp, n_tasks, iters)
+    std_data = data.std(axis=-1)    # (n_exp, n_tasks, iters)
+
+    mean_reshaped = np.concatenate([mean_data[:, i, :] for i in range(mean_data.shape[1])], axis=-1)
+    std_reshaped = np.concatenate([std_data[:, i, :] for i in range(std_data.shape[1])], axis=-1)
+
+    mean = mean_reshaped.mean(axis=0)
+    std = std_reshaped.mean(axis=0)
+    n = mean.shape[0]
+    x = np.linspace(1, n, n)
+
+    ax.fill_between(x, mean - std, mean + std, color=color, alpha=0.2)
+    ax.plot(x, mean_reshaped.T, color=color, alpha=0.5, linestyle="--", linewidth=0.5)
+    l1, = ax.plot(x, mean, color=color, linewidth=2)
+
+    return l1
+
+
+def visualize_depths(path=None, fontsize=6, ticksize=6, axsize=(0.17, 0.215, 0.825, 0.7), yoffset=0.035):
+    fig = plt.figure(figsize=(2.56, 1.5))
+    ax = fig.add_axes(axsize)
+
+    def load_depths(folder):
+        return np.load(os.path.join(folder, "depths.npy"))  # (n_exp, n_tasks, iters, 50)
+
+    boosted_curriculum_data = load_depths("logs/boosted_curriculum")
+    boosted_data = load_depths("logs/boosted_no_curriculum")
+    curriculum_data = load_depths("logs/no_boosted_curriculum")
+    default_data = load_depths("logs/no_boosted_no_curriculum")
+
+    l1 = plot_lines_with_depth_std(ax, boosted_curriculum_data, "C0")
+    l2 = plot_lines_with_depth_std(ax, boosted_data, "C1")
+    l3 = plot_lines_with_depth_std(ax, curriculum_data, "C2")
+    l4 = plot_lines_with_depth_std(ax, default_data, "C3")
+
+    ylim = ax.get_ylim()
+    plt.vlines([20, 40], *ylim, color="black", linestyle="--", linewidths=[2, 2], alpha=0.5)
+    patch = Rectangle([0, ylim[0]], 20, ylim[1] - ylim[0], color="black", alpha=0.4)
+    fig.gca().add_patch(patch)
+    patch = Rectangle([20, ylim[0]], 20, ylim[1] - ylim[0], color="black", alpha=0.2)
+    fig.gca().add_patch(patch)
+
+    plt.text(10, ylim[1] + yoffset, r"$\mathcal{T}_1$", fontsize=ticksize)
+    plt.text(30, ylim[1] + yoffset, r"$\mathcal{T}_2$", fontsize=ticksize)
+    plt.text(50, ylim[1] + yoffset, r"$\mathcal{T}_3$", fontsize=ticksize)
+
+    plt.legend([l1, l2, l3, l4], ["BC-FQI", "B-FQI", "C-FQI", "FQI"], fontsize=ticksize, ncol=2)
+    plt.xlabel("Iteration", fontsize=fontsize)
+    plt.ylabel("Mean tree depth", fontsize=fontsize)
+    plt.gca().tick_params(axis='both', which='major', labelsize=ticksize)
+    plt.xlim([0, 60])
+    plt.ylim(ylim)
+    plt.grid()
+
+    if path is None:
+        plt.show()
+    else:
+        plt.savefig(path, bbox_inches="tight")
+
+
 if __name__ == "__main__":
     os.makedirs("figures", exist_ok=True)
     visualize_evolution(path="figures/car_on_hill_performance.pdf", residuals=False, fontsize=9,
                         axsize=(0.195, 0.215, 0.78, 0.7), yoffset=0.035)
     visualize_evolution(path="figures/car_on_hill_diff_q.pdf", residuals=True, fontsize=9, axsize=(0.17, 0.215, 0.805, 0.7),
                         yoffset=0.02)
+    visualize_depths(path="figures/car_on_hill_depths.pdf", fontsize=9, axsize=(0.17, 0.215, 0.825, 0.7), yoffset=0.035)

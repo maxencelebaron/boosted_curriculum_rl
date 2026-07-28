@@ -41,6 +41,7 @@ class FastExtraTreesActionRegressor:
 
     def fit(self, states, qs, **kwargs):
         self.sklearn_tree.fit(states, qs, **kwargs)
+        self.last_depths = [t.get_depth() for t in self.sklearn_tree.estimators_]
 
     def predict(self, state, **kwargs):
         return single_thread_predict(self.sklearn_tree, state)

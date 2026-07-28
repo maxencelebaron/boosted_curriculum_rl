@@ -130,6 +130,7 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
 
     js = list()
     diff_qs = list()
+    all_depths = list()
     all_losses = list() if (neural and monitor_loss) else None
     all_q_errors = list() if (neural and monitor_loss) else None
     for i, mdp in enumerate(mdps):
@@ -154,6 +155,7 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
 
         j_task = list()
         diff_q_task = list()
+        depth_task = list()
         agent.policy.set_epsilon(test_epsilon)
         idx = np.arange(i + 1) if boosted else 0
         # Loop
@@ -171,6 +173,9 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
                     agent.approximator, test_states, test_actions, test_q[i], idx)
 
             agent.fit(dataset)
+
+            reg = agent.approximator.model[i if boosted else 0]
+            depth_task.append(reg.last_depths)
 
             if all_losses is not None:
                 regressor = agent.approximator.model[i if boosted else 0]
@@ -190,8 +195,9 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
 
         js.append(j_task)
         diff_qs.append(diff_q_task)
+        all_depths.append(depth_task)
 
-    return js, diff_qs, all_losses, all_q_errors, fit_params
+    return js, diff_qs, all_losses, all_q_errors, all_depths, fit_params
 
 
 if __name__ == '__main__':
@@ -233,7 +239,8 @@ if __name__ == '__main__':
     Qs = [o[1] for o in out]
     Losses = [o[2] for o in out]
     Q_errors = [o[3] for o in out]
-    fit_params = out[0][4]
+    Depths = [o[4] for o in out]
+    fit_params = out[0][5]
 
     # Summary folder
     if args.use_neural:
@@ -248,6 +255,7 @@ if __name__ == '__main__':
     pathlib.Path(folder_name).mkdir(parents=True, exist_ok=True)
     np.save(folder_name + '/J.npy', Js)
     np.save(folder_name + '/Q.npy', Qs)
+    np.save(folder_name + '/depths.npy', np.array(Depths))
     if args.monitor_loss and args.use_neural:
         np.save(folder_name + '/losses.npy', np.array(Losses, dtype=float))
         np.save(folder_name + '/q_errors_per_epoch.npy', np.array(Q_errors, dtype=float))

@@ -107,4 +107,5 @@ class NeuralRegressor():
             self.last_loss_history.append(avg_loss)
             if self.epoch_callback is not None:
                 self.epoch_callback()
+                self._model.train()
             print(f"  epoch {epoch+1}/{n_epochs}  loss={avg_loss:.6f}")

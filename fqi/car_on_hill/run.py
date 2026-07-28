@@ -189,7 +189,7 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
         js.append(j_task)
         diff_qs.append(diff_q_task)
 
-    return js, diff_qs, all_losses, all_q_errors
+    return js, diff_qs, all_losses, all_q_errors, fit_params
 
 
 if __name__ == '__main__':
@@ -231,12 +231,13 @@ if __name__ == '__main__':
     Qs = [o[1] for o in out]
     Losses = [o[2] for o in out]
     Q_errors = [o[3] for o in out]
+    fit_params = out[0][4]
 
     # Summary folder
     if args.use_neural:
         boost = 'boosted' if args.use_boosting else 'no_boosted'
         cur = 'curriculum' if args.use_curriculum else 'no_curriculum'
-        folder_name = './logs/neural_' + boost + '_' + cur
+        folder_name = f'./logs/neural_{boost}_{cur}_lr{fit_params["lr"]}_ep{fit_params["n_epochs"]}_bs{fit_params["batch_size"]}'
     else:
         alg = 'boosted' if args.use_boosting else 'no_boosted'
         cur = 'curriculum' if args.use_curriculum else 'no_curriculum'

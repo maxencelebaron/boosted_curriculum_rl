@@ -225,6 +225,8 @@ if __name__ == '__main__':
             ms = [1.2]
             iters_per_env = 60
 
+    print("=========================")  # fit_params (lr, n_epochs, ...) printed below after Parallel
+
     out = Parallel(n_jobs=args.n_jobs)(
         delayed(experiment)(
             exp_id,
@@ -252,6 +254,13 @@ if __name__ == '__main__':
         alg = 'boosted' if args.use_boosting else 'no_boosted'
         cur = 'curriculum' if args.use_curriculum else 'no_curriculum'
         folder_name = './logs/' + alg + '_' + cur
+    if args.use_neural:
+        print(f"  lr:             {fit_params['lr']}")
+        print(f"  n_epochs:       {fit_params['n_epochs']}")
+        print(f"  batch_size:     {fit_params['batch_size']}")
+        print(f"  reinit:         {fit_params['reinit']}")
+        print("=========================")
+    print(f"Output folder: {folder_name}")
     pathlib.Path(folder_name).mkdir(parents=True, exist_ok=True)
     np.save(folder_name + '/J.npy', Js)
     np.save(folder_name + '/Q.npy', Qs)

@@ -91,6 +91,7 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
         fit_params = dict(
             lr=1e-3,
             n_epochs=90,
+            # essayer avec 40 epochs
             batch_size=32,
             reinit=True
         )
@@ -147,6 +148,7 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
             agent.policy.set_epsilon(epsilon)
             logger.info('Generating dataset for task %d...' % i)
             dataset = core.evaluate(n_episodes=1000)
+            # pathlib.Path('data_2').mkdir(parents=True, exist_ok=True)
             with open('data/dataset_%1.3f.pkl' % mdp._m, 'wb') as f:
                 pickle.dump(dataset, f)
 

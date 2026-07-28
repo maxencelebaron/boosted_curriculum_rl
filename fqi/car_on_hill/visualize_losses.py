@@ -82,18 +82,27 @@ def visualize_loss_convergence(folder, algo_label, n_tasks, path=None, fontsize=
     plt.close(fig)
 
 
+def get_suffixes():
+    import glob
+    folders = glob.glob("logs/neural_boosted_curriculum_*")
+    suffixes = [os.path.basename(f).replace("neural_boosted_curriculum_", "") for f in folders]
+    return suffixes if suffixes else [""]
+
+
 if __name__ == "__main__":
     os.makedirs("figures", exist_ok=True)
 
-    algorithms = [
-        ("logs/neural_boosted_curriculum",       "BC-NeuralFQI", 3),
-        ("logs/neural_boosted_no_curriculum",    "B-NeuralFQI",  1),
-        ("logs/neural_no_boosted_curriculum",    "C-NeuralFQI",  3),
-        ("logs/neural_no_boosted_no_curriculum", "NeuralFQI",    1),
-    ]
-    for folder, label, n_tasks in algorithms:
-        visualize_loss_convergence(
-            folder, label, n_tasks,
-            path=f"figures/losses_{label}.pdf",
-            fontsize=9, ticksize=8,
-        )
+    for suffix in get_suffixes():
+        suf = f"_{suffix}" if suffix else ""
+        algorithms = [
+            (f"logs/neural_boosted_curriculum{suf}",       "BC-NeuralFQI", 3),
+            (f"logs/neural_boosted_no_curriculum{suf}",    "B-NeuralFQI",  1),
+            (f"logs/neural_no_boosted_curriculum{suf}",    "C-NeuralFQI",  3),
+            (f"logs/neural_no_boosted_no_curriculum{suf}", "NeuralFQI",    1),
+        ]
+        for folder, label, n_tasks in algorithms:
+            visualize_loss_convergence(
+                folder, label, n_tasks,
+                path=f"figures/losses_{label}_{suffix}.pdf",
+                fontsize=9, ticksize=8,
+            )

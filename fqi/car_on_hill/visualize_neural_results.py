@@ -22,16 +22,17 @@ def plot_lines(ax, data, color):
 
 
 def visualize_evolution(path=None, residuals=False, fontsize=6, ticksize=6, axsize=(0.17, 0.215, 0.825, 0.7),
-                        yoffset=0.035):
+                        yoffset=0.035, suffix=""):
     fig = plt.figure(figsize=(2.56, 1.5))
     ax = fig.add_axes(axsize)
 
     filename = "Q.npy" if residuals else "J.npy"
+    suf = f"_{suffix}" if suffix else ""
 
-    boosted_curriculum_data = np.load(os.path.join("logs/neural_boosted_curriculum", filename))
-    boosted_data = np.load(os.path.join("logs/neural_boosted_no_curriculum", filename))
-    curriculum_data = np.load(os.path.join("logs/neural_no_boosted_curriculum", filename))
-    default_data = np.load(os.path.join("logs/neural_no_boosted_no_curriculum", filename))
+    boosted_curriculum_data = np.load(os.path.join(f"logs/neural_boosted_curriculum{suf}", filename))
+    boosted_data = np.load(os.path.join(f"logs/neural_boosted_no_curriculum{suf}", filename))
+    curriculum_data = np.load(os.path.join(f"logs/neural_no_boosted_curriculum{suf}", filename))
+    default_data = np.load(os.path.join(f"logs/neural_no_boosted_no_curriculum{suf}", filename))
 
     l1 = plot_lines(ax, boosted_curriculum_data, "C0")
     l2 = plot_lines(ax, boosted_data, "C1")
@@ -65,12 +66,20 @@ def visualize_evolution(path=None, residuals=False, fontsize=6, ticksize=6, axsi
         plt.savefig(path, bbox_inches="tight")
 
 
+def get_suffixes():
+    import glob
+    folders = glob.glob("logs/neural_boosted_curriculum_*")
+    suffixes = [os.path.basename(f).replace("neural_boosted_curriculum_", "") for f in folders]
+    return suffixes if suffixes else [""]
+
+
 if __name__ == "__main__":
     os.makedirs("figures", exist_ok=True)
-    visualize_evolution(path="figures/car_on_hill_neural_performance.pdf", residuals=False, fontsize=9,
-                        axsize=(0.195, 0.215, 0.78, 0.7), yoffset=0.035)
-    visualize_evolution(path="figures/car_on_hill_neural_diff_q.pdf", residuals=True, fontsize=9,
-                        axsize=(0.17, 0.215, 0.805, 0.7), yoffset=0.02)
+    for suffix in get_suffixes():
+        visualize_evolution(path=f"figures/car_on_hill_neural_performance_{suffix}.pdf", residuals=False, fontsize=9,
+                            axsize=(0.195, 0.215, 0.78, 0.7), yoffset=0.035, suffix=suffix)
+        visualize_evolution(path=f"figures/car_on_hill_neural_diff_q_{suffix}.pdf", residuals=True, fontsize=9,
+                            axsize=(0.17, 0.215, 0.805, 0.7), yoffset=0.02, suffix=suffix)
 
 
 # import numpy as np

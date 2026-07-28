@@ -18,13 +18,11 @@ class Q_Network(nn.Module):
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(2, 32),
+            nn.Linear(2, 128),
             nn.Sigmoid(),
-            nn.Linear(32, 32),
+            nn.Linear(128, 128),
             nn.Sigmoid(),
-            nn.Linear(32, 32),
-            nn.Sigmoid(),
-            nn.Linear(32, 2),
+            nn.Linear(128, 2),
 
         )
 

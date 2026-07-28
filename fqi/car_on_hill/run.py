@@ -91,9 +91,8 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
         fit_params = dict(
             lr=1e-3,
             n_epochs=90,
-            # essayer avec 40 epochs
             batch_size=32,
-            reinit=True,
+            reinit=False,
         )
     else:
         approximator_cls = FastExtraTreesActionRegressor
@@ -174,8 +173,8 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
 
             agent.fit(dataset)
 
-            reg = agent.approximator.model[i if boosted else 0]
-            depth_task.append(reg.last_depths)
+            # reg = agent.approximator.model[0].model[i if boosted else 0]
+            # depth_task.append(reg.last_depths)
 
             if all_losses is not None:
                 regressor = agent.approximator.model[i if boosted else 0]

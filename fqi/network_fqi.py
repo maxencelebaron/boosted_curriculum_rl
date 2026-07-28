@@ -22,6 +22,8 @@ class Q_Network(nn.Module):
             nn.Sigmoid(),
             nn.Linear(32, 32),
             nn.Sigmoid(),
+            nn.Linear(32, 32),
+            nn.Sigmoid(),
             nn.Linear(32, 2),
 
         )

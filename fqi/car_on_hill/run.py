@@ -93,7 +93,7 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
             n_epochs=90,
             # essayer avec 40 epochs
             batch_size=32,
-            reinit=True
+            reinit=True,
         )
     else:
         approximator_cls = FastExtraTreesActionRegressor

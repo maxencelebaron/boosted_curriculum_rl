@@ -23,6 +23,7 @@ class Q_Network(nn.Module):
             nn.Linear(32, 32),
             nn.Sigmoid(),
             nn.Linear(32, 2),
+
         )
 
     def forward(self, state):

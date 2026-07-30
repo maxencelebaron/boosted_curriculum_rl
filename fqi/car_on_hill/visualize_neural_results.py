@@ -13,10 +13,12 @@ plt.rcParams.update({
 def plot_lines(ax, data, color):
     reshaped_data = np.concatenate([data[:, i, :] for i in range(0, data.shape[1])], axis=-1)
     mean = np.mean(reshaped_data, axis=0)
+    std = np.std(reshaped_data, axis=0)
     n = mean.shape[0]
+    x = np.linspace(1, n, n)
 
-    ax.plot(np.linspace(1, n, n), reshaped_data.T, color=color, alpha=0.5, linestyle="--", linewidth=0.5)
-    l1, = ax.plot(np.linspace(1, n, n), mean, color=color, linewidth=2)
+    ax.fill_between(x, mean - std, mean + std, color=color, alpha=0.2)
+    l1, = ax.plot(x, mean, color=color, linewidth=1.5)
 
     return l1
 

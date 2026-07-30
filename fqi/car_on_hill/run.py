@@ -224,7 +224,7 @@ if __name__ == '__main__':
             ms = [1.2]
             iters_per_env = 60
 
-    print("=========================")  # fit_params (lr, n_epochs, ...) printed below after Parallel
+    print("=========================")
 
     out = Parallel(n_jobs=args.n_jobs)(
         delayed(experiment)(

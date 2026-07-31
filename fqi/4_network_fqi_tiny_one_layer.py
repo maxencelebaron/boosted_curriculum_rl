@@ -69,13 +69,18 @@ class NeuralRegressor:
         self.last_loss_history = []
         self.epoch_callback = None
 
+    @property
+    def _device(self):
+        return next(self._model.parameters()).device
+
     def predict(self, state, **kwargs):
         if not self._is_fitted:
             return np.zeros((len(state), 2))
-        s = torch.FloatTensor(state)
+        print(f"[NeuralRegressor] device: {self._device}")
+        s = torch.FloatTensor(state).to(self._device)
         with torch.no_grad():
             self._model.eval()
-            return self._model(s).numpy()
+            return self._model(s).cpu().numpy()
 
     def fit(
         self,
@@ -100,9 +105,9 @@ class NeuralRegressor:
                 lr=lr
             )
 
-        s = torch.FloatTensor(state)
-        a = torch.LongTensor(action.reshape(-1))
-        t = torch.FloatTensor(q)
+        s = torch.FloatTensor(state).to(self._device)
+        a = torch.LongTensor(action.reshape(-1)).to(self._device)
+        t = torch.FloatTensor(q).to(self._device)
 
         loader = DataLoader(
             TensorDataset(s, a, t),
@@ -129,10 +134,10 @@ class NeuralRegressor:
             print(f"  epoch {epoch+1}/{n_epochs}  loss={avg_loss:.6f}")
 
     def encode(self, state) -> np.ndarray:
-        s = torch.FloatTensor(state)
+        s = torch.FloatTensor(state).to(self._device)
         with torch.no_grad():
             self._model.eval()
-            return self._model.encode(s).numpy()
+            return self._model.encode(s).cpu().numpy()
 
 
 def grow_network_gromo(

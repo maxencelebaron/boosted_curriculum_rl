@@ -13,7 +13,7 @@ from tqdm import trange
 
 from fqi.neural_fqi import BoostedNeuralFQI, NeuralFQI
 from fqi.car_on_hill.solver import solve_car_on_hill
-from utils.growing_network import pre_growth_optimize
+from fqi.utils.growing_network import pre_growth_optimize
 
 from mushroom_rl.core import Core, Logger
 from mushroom_rl.environments.car_on_hill import CarOnHill

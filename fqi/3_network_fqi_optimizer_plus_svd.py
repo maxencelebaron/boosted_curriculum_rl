@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from mushroom_rl.utils.dataset import parse_dataset
 
-from utils.growing_network import (
+from fqi.utils.growing_network import (
     feature_rank,
     srank,
     measure_plasticity,

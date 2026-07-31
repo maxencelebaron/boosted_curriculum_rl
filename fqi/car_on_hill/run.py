@@ -57,7 +57,7 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
     test_states = np.array([test_states]).repeat(2, 0).reshape(-1, 2)
     test_actions = np.array(
         [np.zeros(len(test_states) // 2),
-         np.ones(len(test_states) // 2)]).reshape(-1, 1).astype(np.int)
+         np.ones(len(test_states) // 2)]).reshape(-1, 1).astype(int)
 
     # Test Q
     test_q = list()
@@ -90,7 +90,7 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
         )
         fit_params = dict(
             lr=1e-3,
-            n_epochs=20,
+            n_epochs=60,
             batch_size=32,
             reinit=False,
         )

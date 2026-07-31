@@ -10,7 +10,7 @@ from gromo.modules.linear_growing_module import LinearGrowingModule
 
 from mushroom_rl.utils.dataset import parse_dataset
 
-from utils.growing_network import (
+from fqi.utils.growing_network import (
     feature_rank,
     srank,
     measure_plasticity,
@@ -19,7 +19,7 @@ from utils.growing_network import (
     pre_growth_optimize,
 )
 
-from utils.growing_network import (
+from fqi.utils.growing_network import (
     line_search
 )
 

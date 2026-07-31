@@ -1,0 +1,7 @@
+numpy
+Cython==3.0.12
+-e ../mushroom-rl
+scikit-learn
+matplotlib
+pynput
+-e ../gromo

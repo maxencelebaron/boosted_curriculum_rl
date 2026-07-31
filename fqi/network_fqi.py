@@ -12,17 +12,17 @@ class Q_Network(nn.Module):
     mushroom-rl's QApproximatorSimple handles action selection on top
     of this output.
 
-    Architecture: state 2 -> 32 -> 32 -> 2.
+    Architecture: state 2 -> 256 -> 256 -> 2.
     """
 
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(2, 128),
+            nn.Linear(2, 256),
             nn.Sigmoid(),
-            nn.Linear(128, 128),
+            nn.Linear(256, 256),
             nn.Sigmoid(),
-            nn.Linear(128, 2),
+            nn.Linear(256, 2),
         )
 
     def forward(self, state):

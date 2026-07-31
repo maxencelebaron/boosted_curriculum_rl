@@ -4,7 +4,7 @@
 #SBATCH --time=1-00:00:00
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
-#SBATCH --exclude=margpu001,margpu004,margpu029
+#SBATCH --exclude=margpu001,margpu004,margpu[024-027],margpu029
 #SBATCH --output=slurm/logs/%x_%A_%a.out
 #SBATCH --error=slurm/logs/%x_%A_%a.err
 #SBATCH --array=0-7

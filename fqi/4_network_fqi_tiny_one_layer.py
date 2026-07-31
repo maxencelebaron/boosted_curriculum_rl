@@ -63,6 +63,8 @@ class NeuralRegressor:
 
     def __init__(self, hidden_size: int = 16, **kwargs):
         self._model = Q_Network(hidden_size)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._model.to(device)
         self._optimizer = None
         self._loss_fn = nn.MSELoss(reduction='sum')
         self._is_fitted = False

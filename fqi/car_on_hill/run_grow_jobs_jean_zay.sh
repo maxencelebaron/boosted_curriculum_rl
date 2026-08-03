@@ -15,7 +15,7 @@ module load arch/a100
 
 export PYTHONPATH=$PYTHONPATH:$PWD/../..
 
-COMMON="--n-exp 1 --n-jobs 1 --monitor-loss"
+COMMON="--n-exp 10 --n-jobs 1 --monitor-loss"
 
 declare -a CMDS=(
     "python run_grow.py --use-curriculum --growth-mode random          $COMMON"

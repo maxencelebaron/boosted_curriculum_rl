@@ -90,7 +90,7 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
         )
         fit_params = dict(
             lr=1e-3,
-            n_epochs=60,
+            n_epochs=20,
             batch_size=32,
             reinit=False,
         )

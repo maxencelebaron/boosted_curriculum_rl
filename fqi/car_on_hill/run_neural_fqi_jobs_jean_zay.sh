@@ -1,13 +1,16 @@
 #!/bin/bash
 #SBATCH --job-name=neural_fqi_%a
-#SBATCH --partition=tau
-#SBATCH --time=1-00:00:00
+#SBATCH -C a100
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
+#SBATCH --time=10:00:00
 #SBATCH --output=slurm/logs/%x_%A_%a.out
 #SBATCH --error=slurm/logs/%x_%A_%a.err
 #SBATCH --array=0-3
+#SBATCH -A inl@a100
+
+module purge
+module load arch/a100
 
 export PYTHONPATH=$PYTHONPATH:$PWD/../..
 
@@ -18,4 +21,4 @@ declare -a ARGS=(
     "--use-neural"
 )
 
-python run.py --n-exp 20 --n-jobs 10 --monitor-loss ${ARGS[$SLURM_ARRAY_TASK_ID]}
+python run.py --n-exp 10 --monitor-loss ${ARGS[$SLURM_ARRAY_TASK_ID]}

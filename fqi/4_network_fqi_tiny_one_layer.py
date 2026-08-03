@@ -32,11 +32,11 @@ class Q_Network(nn.Module):
     def __init__(self, hidden_size: int):
         super().__init__()
         self.h1 = nn.Sequential(
-            nn.Linear(2, 64),
+            nn.Linear(2, 256),
             nn.Sigmoid()
         )
         self.encoder = LinearGrowingModule(
-            in_features=64,
+            in_features=256,
             out_features=hidden_size,
             post_layer_function=nn.Sigmoid(),
             name="encoder",
@@ -61,7 +61,7 @@ class NeuralRegressor:
     Additions: encode() for feature monitoring, _model is swappable after growth.
     """
 
-    def __init__(self, hidden_size: int = 16, **kwargs):
+    def __init__(self, hidden_size: int, **kwargs):
         self._model = Q_Network(hidden_size)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._model.to(device)

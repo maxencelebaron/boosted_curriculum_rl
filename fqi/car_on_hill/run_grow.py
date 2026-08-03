@@ -72,9 +72,9 @@ class Args:
     """number of random probe tasks for the final plasticity measurement"""
 
     # Network growth
-    initial_hidden: int = 16
+    initial_hidden: int = 128
     """initial encoder hidden size"""
-    final_hidden: int = 64
+    final_hidden: int = 256
     """target encoder hidden size after all growth events"""
     grow_every: int = 20
     """FQI iterations between growth events (no-curriculum only)"""

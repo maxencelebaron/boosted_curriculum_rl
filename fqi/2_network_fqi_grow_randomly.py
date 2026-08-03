@@ -25,11 +25,11 @@ class Q_Network(nn.Module):
     def __init__(self, hidden_size: int):
         super().__init__()
         self.h1 = nn.Sequential(
-            nn.Linear(2, 64),
+            nn.Linear(2, 256),
             nn.Sigmoid()
         )
         self.encoder = nn.Sequential(
-            nn.Linear(64, hidden_size),
+            nn.Linear(256, hidden_size),
             nn.Sigmoid()
         )
         self.q_head = nn.Linear(hidden_size, 2)
@@ -47,7 +47,7 @@ class NeuralRegressor:
     Additions: encode() for feature monitoring, _model is swappable after growth.
     """
 
-    def __init__(self, hidden_size: int = 16, **kwargs):
+    def __init__(self, hidden_size: int, **kwargs):
         self._model = Q_Network(hidden_size)
         self._optimizer = None
         self._loss_fn = nn.MSELoss(reduction='sum')

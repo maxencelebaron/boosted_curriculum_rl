@@ -132,10 +132,11 @@ def _compute_grow_batch(
     q_max = q_next.max(axis=1)
     td = r + gamma * (1 - done) * q_max
 
+    device = next(regressor._model.parameters()).device
     return (
-        torch.FloatTensor(s),
-        torch.LongTensor(a),
-        torch.FloatTensor(td),
+        torch.FloatTensor(s).to(device),
+        torch.LongTensor(a).to(device),
+        torch.FloatTensor(td).to(device),
     )
 
 

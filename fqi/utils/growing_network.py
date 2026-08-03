@@ -169,17 +169,17 @@ def evaluate_layer(
     the full model, using a dataloader of (observations, targets) pairs.
 
     Performs the chain:
-        conv → flat → encoder.extended_forward → q_head.extended_forward
+        h1=linear → encoder.extended_forward → q_head.extended_forward
 
     Parameters
     ----------
     model : nn.Module
-        Full Q-network (must expose .conv, .flat, .encoder, .q_head).
+        Full Q-network (must expose .h1, .encoder, .q_head).
     layer : GrowingModule
         The growing layer being tested. Not called directly here — the
         scaling_factor set on it is picked up by the extended_forward chain.
     dataloader : torch.utils.data.DataLoader
-        Yields (observations [B,H,W,C], targets) batches.
+        Yields (observations, targets) batches.
     loss_function : nn.Module | Callable
         Applied to (q_vals, targets). Must have reduction="mean".
     metrics : Metric | None, optional
@@ -212,7 +212,7 @@ def evaluate_layer(
         dataloader, dataloader_seed=dataloader_seed, batch_limit=batch_limit
     ):
         x, y = x.to(device), y.to(device)
-        flat_x = model.flat(model.conv(x.permute(0, 3, 1, 2).float()))
+        flat_x = model.h1(x.float())
         main_enc, ext_enc = model.encoder.extended_forward(flat_x)
         y_pred, _ = model.q_head.extended_forward(main_enc, x_ext=ext_enc)
         loss = loss_function(y_pred, y)

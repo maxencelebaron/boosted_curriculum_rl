@@ -4,4 +4,5 @@ Cython==3.0.12
 scikit-learn
 matplotlib
 pynput
+tyro==1.0.15
 -e ../gromo

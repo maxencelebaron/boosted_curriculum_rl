@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import argparse
 import importlib
+import tyro
 import pathlib
 import pickle
 from dataclasses import dataclass
@@ -383,66 +383,8 @@ def experiment(exp_id: int, args: Args) -> tuple:
     return js, diff_qs, all_losses, all_q_errors, fit_params
 
 
-def parse_args() -> Args:
-    _d = Args()
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--n-exp", type=int, default=_d.n_exp)
-    parser.add_argument("--n-jobs", type=int, default=_d.n_jobs)
-    parser.add_argument("--use-curriculum", action="store_true", default=_d.use_curriculum)
-    parser.add_argument("--use-boosting", action="store_true", default=_d.use_boosting)
-    parser.add_argument("--monitor-loss", action="store_true", default=_d.monitor_loss)
-    parser.add_argument("--growth-mode", type=str, default=_d.growth_mode)
-    parser.add_argument("--iters-per-env", type=int, default=_d.iters_per_env)
-    parser.add_argument("--lr", type=float, default=_d.lr)
-    parser.add_argument("--n-epochs", type=int, default=_d.n_epochs)
-    parser.add_argument("--batch-size", type=int, default=_d.batch_size)
-    parser.add_argument("--feature-rank-n-states", type=int, default=_d.feature_rank_n_states)
-    parser.add_argument("--return-window-size", type=int, default=_d.return_window_size)
-    parser.add_argument("--compute-final-feature-rank", action="store_true", default=_d.compute_final_feature_rank)
-    parser.add_argument("--plasticity-n-steps", type=int, default=_d.plasticity_n_steps)
-    parser.add_argument("--plasticity-n-tasks", type=int, default=_d.plasticity_n_tasks)
-    parser.add_argument("--plasticity-n-samples", type=int, default=_d.plasticity_n_samples)
-    parser.add_argument("--plasticity-final-n-tasks", type=int, default=_d.plasticity_final_n_tasks)
-    parser.add_argument("--initial-hidden", type=int, default=_d.initial_hidden)
-    parser.add_argument("--final-hidden", type=int, default=_d.final_hidden)
-    parser.add_argument("--grow-every", type=int, default=_d.grow_every)
-    parser.add_argument("--pre-growth-steps", type=int, default=_d.pre_growth_steps)
-    parser.add_argument("--grow-batch-size", type=int, default=_d.grow_batch_size)
-    parser.add_argument("--bellman-residual-threshold", type=float, default=_d.bellman_residual_threshold)
-    parser.add_argument("--numerical-threshold", type=float, default=_d.numerical_threshold)
-    parser.add_argument("--statistical-threshold", type=float, default=_d.statistical_threshold)
-    a = parser.parse_args()
-    return Args(
-        n_exp=a.n_exp,
-        n_jobs=a.n_jobs,
-        use_curriculum=a.use_curriculum,
-        use_boosting=a.use_boosting,
-        monitor_loss=a.monitor_loss,
-        growth_mode=a.growth_mode,
-        iters_per_env=a.iters_per_env,
-        lr=a.lr,
-        n_epochs=a.n_epochs,
-        batch_size=a.batch_size,
-        feature_rank_n_states=a.feature_rank_n_states,
-        return_window_size=a.return_window_size,
-        compute_final_feature_rank=a.compute_final_feature_rank,
-        plasticity_n_steps=a.plasticity_n_steps,
-        plasticity_n_tasks=a.plasticity_n_tasks,
-        plasticity_n_samples=a.plasticity_n_samples,
-        plasticity_final_n_tasks=a.plasticity_final_n_tasks,
-        initial_hidden=a.initial_hidden,
-        final_hidden=a.final_hidden,
-        grow_every=a.grow_every,
-        pre_growth_steps=a.pre_growth_steps,
-        grow_batch_size=a.grow_batch_size,
-        bellman_residual_threshold=a.bellman_residual_threshold,
-        numerical_threshold=a.numerical_threshold,
-        statistical_threshold=a.statistical_threshold,
-    )
-
-
 if __name__ == '__main__':
-    args = parse_args()
+    args = tyro.cli(Args)
     assert args.growth_mode in GROWTH_MODULES, (
         f"Unknown growth_mode '{args.growth_mode}'. "
         f"Choose from: {list(GROWTH_MODULES)}"

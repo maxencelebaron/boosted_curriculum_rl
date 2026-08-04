@@ -33,7 +33,7 @@ GROWTH_MODULES = {
 @dataclass
 class Args:
     # Experiment
-    n_exp: int = 20
+    n_exp: int = 10
     """number of independent experiment seeds"""
     n_jobs: int = 1
     """number of parallel jobs (joblib). Keep at 1 when using GPU."""
@@ -384,32 +384,33 @@ def experiment(exp_id: int, args: Args) -> tuple:
 
 
 def parse_args() -> Args:
+    _d = Args()
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n-exp", type=int, default=20)
-    parser.add_argument("--n-jobs", type=int, default=1)
-    parser.add_argument("--use-curriculum", action="store_true", default=False)
-    parser.add_argument("--use-boosting", action="store_true", default=False)
-    parser.add_argument("--monitor-loss", action="store_true", default=False)
-    parser.add_argument("--growth-mode", type=str, default="svd")
-    parser.add_argument("--iters-per-env", type=int, default=20)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--n-epochs", type=int, default=20)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--feature-rank-n-states", type=int, default=2000)
-    parser.add_argument("--return-window-size", type=int, default=100)
-    parser.add_argument("--compute-final-feature-rank", action="store_true", default=False)
-    parser.add_argument("--plasticity-n-steps", type=int, default=2000)
-    parser.add_argument("--plasticity-n-tasks", type=int, default=10)
-    parser.add_argument("--plasticity-n-samples", type=int, default=1000)
-    parser.add_argument("--plasticity-final-n-tasks", type=int, default=50)
-    parser.add_argument("--initial-hidden", type=int, default=16)
-    parser.add_argument("--final-hidden", type=int, default=64)
-    parser.add_argument("--grow-every", type=int, default=20)
-    parser.add_argument("--pre-growth-steps", type=int, default=10)
-    parser.add_argument("--grow-batch-size", type=int, default=1000)
-    parser.add_argument("--bellman-residual-threshold", type=float, default=0.0)
-    parser.add_argument("--numerical-threshold", type=float, default=1e-6)
-    parser.add_argument("--statistical-threshold", type=float, default=0.0)
+    parser.add_argument("--n-exp", type=int, default=_d.n_exp)
+    parser.add_argument("--n-jobs", type=int, default=_d.n_jobs)
+    parser.add_argument("--use-curriculum", action="store_true", default=_d.use_curriculum)
+    parser.add_argument("--use-boosting", action="store_true", default=_d.use_boosting)
+    parser.add_argument("--monitor-loss", action="store_true", default=_d.monitor_loss)
+    parser.add_argument("--growth-mode", type=str, default=_d.growth_mode)
+    parser.add_argument("--iters-per-env", type=int, default=_d.iters_per_env)
+    parser.add_argument("--lr", type=float, default=_d.lr)
+    parser.add_argument("--n-epochs", type=int, default=_d.n_epochs)
+    parser.add_argument("--batch-size", type=int, default=_d.batch_size)
+    parser.add_argument("--feature-rank-n-states", type=int, default=_d.feature_rank_n_states)
+    parser.add_argument("--return-window-size", type=int, default=_d.return_window_size)
+    parser.add_argument("--compute-final-feature-rank", action="store_true", default=_d.compute_final_feature_rank)
+    parser.add_argument("--plasticity-n-steps", type=int, default=_d.plasticity_n_steps)
+    parser.add_argument("--plasticity-n-tasks", type=int, default=_d.plasticity_n_tasks)
+    parser.add_argument("--plasticity-n-samples", type=int, default=_d.plasticity_n_samples)
+    parser.add_argument("--plasticity-final-n-tasks", type=int, default=_d.plasticity_final_n_tasks)
+    parser.add_argument("--initial-hidden", type=int, default=_d.initial_hidden)
+    parser.add_argument("--final-hidden", type=int, default=_d.final_hidden)
+    parser.add_argument("--grow-every", type=int, default=_d.grow_every)
+    parser.add_argument("--pre-growth-steps", type=int, default=_d.pre_growth_steps)
+    parser.add_argument("--grow-batch-size", type=int, default=_d.grow_batch_size)
+    parser.add_argument("--bellman-residual-threshold", type=float, default=_d.bellman_residual_threshold)
+    parser.add_argument("--numerical-threshold", type=float, default=_d.numerical_threshold)
+    parser.add_argument("--statistical-threshold", type=float, default=_d.statistical_threshold)
     a = parser.parse_args()
     return Args(
         n_exp=a.n_exp,

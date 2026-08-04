@@ -1,0 +1,120 @@
+import glob
+import os
+
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.patches import Rectangle
+
+plt.rcParams.update({
+    "text.usetex": False,
+    "font.family": "serif",
+    "font.serif": ["Roman"],
+})
+
+BASELINE_COLOR = "C3"
+GROW_COLORS = ["C0", "C1", "C2", "C4", "C5"]
+
+
+def plot_lines(ax, data, color, label):
+    reshaped = np.concatenate(
+        [data[:, i, :] for i in range(data.shape[1])], axis=-1
+    )
+    mean = np.mean(reshaped, axis=0)
+    std = np.std(reshaped, axis=0)
+    x = np.linspace(1, mean.shape[0], mean.shape[0])
+    ax.fill_between(x, mean - std, mean + std, color=color, alpha=0.2)
+    l, = ax.plot(x, mean, color=color, linewidth=1.5, label=label)
+    return l
+
+
+def extract_grow_label(folder):
+    name = os.path.basename(folder)
+    return name.replace("grow_", "").split("_no_boosted")[0]
+
+
+def plot_grow_results(
+    logs_subdir, curriculum, filename, ylabel, path=None,
+    fontsize=9, ticksize=6,
+    axsize=(0.17, 0.215, 0.825, 0.7), yoffset=0.035,
+):
+    all_folders = sorted(glob.glob(os.path.join(logs_subdir, "*")))
+    all_folders = [f for f in all_folders if os.path.isdir(f)]
+
+    if not all_folders:
+        print(f"No folders found in {logs_subdir}")
+        return
+
+    fig = plt.figure(figsize=(2.56, 1.5))
+    ax = fig.add_axes(axsize)
+
+    grow_idx = 0
+    for folder in all_folders:
+        npy_path = os.path.join(folder, filename)
+        if not os.path.exists(npy_path):
+            continue
+        name = os.path.basename(folder)
+        data = np.load(npy_path)
+        if name.startswith("neural_"):
+            plot_lines(ax, data, BASELINE_COLOR, "NeuralFQI")
+        elif name.startswith("grow_"):
+            label = extract_grow_label(folder)
+            plot_lines(ax, data, GROW_COLORS[grow_idx % len(GROW_COLORS)], label)
+            grow_idx += 1
+
+    ylim = ax.get_ylim()
+
+    if curriculum:
+        plt.vlines(
+            [20, 40], *ylim,
+            color="black", linestyle="--", linewidths=[2, 2], alpha=0.5,
+        )
+        ax.add_patch(Rectangle(
+            [0, ylim[0]], 20, ylim[1] - ylim[0], color="black", alpha=0.4,
+        ))
+        ax.add_patch(Rectangle(
+            [20, ylim[0]], 20, ylim[1] - ylim[0], color="black", alpha=0.2,
+        ))
+        plt.text(10, ylim[1] + yoffset, r"$\mathcal{T}_1$", fontsize=ticksize)
+        plt.text(30, ylim[1] + yoffset, r"$\mathcal{T}_2$", fontsize=ticksize)
+        plt.text(50, ylim[1] + yoffset, r"$\mathcal{T}_3$", fontsize=ticksize)
+
+    plt.legend(fontsize=ticksize, ncol=2)
+    plt.xlabel("Iteration", fontsize=fontsize)
+    plt.ylabel(ylabel, fontsize=fontsize)
+    plt.gca().tick_params(axis="both", which="major", labelsize=ticksize)
+    plt.xlim([0, 60])
+    plt.ylim(ylim)
+    plt.grid()
+
+    if path is None:
+        plt.show()
+    else:
+        plt.savefig(path, bbox_inches="tight")
+    plt.close()
+
+
+if __name__ == "__main__":
+    os.makedirs("figures", exist_ok=True)
+
+    for curriculum, subfolder in [
+        (True,  "logs/logs_curriculum"),
+        (False, "logs/logs_no_curriculum"),
+    ]:
+        tag = "curriculum" if curriculum else "no_curriculum"
+
+        plot_grow_results(
+            subfolder, curriculum,
+            filename="J.npy",
+            ylabel="Cum. Disc. Return",
+            path=f"figures/car_on_hill_grow_performance_{tag}.pdf",
+            fontsize=9, ticksize=6,
+            axsize=(0.195, 0.215, 0.78, 0.7), yoffset=0.035,
+        )
+        plot_grow_results(
+            subfolder, curriculum,
+            filename="Q.npy",
+            ylabel=r"$\| Q_t^k - Q_t^* \|_{1, \mu}$",
+            path=f"figures/car_on_hill_grow_diff_q_{tag}.pdf",
+            fontsize=9, ticksize=6,
+            axsize=(0.17, 0.215, 0.805, 0.7), yoffset=0.02,
+        )

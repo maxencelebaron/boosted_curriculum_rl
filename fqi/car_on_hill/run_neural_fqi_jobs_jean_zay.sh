@@ -21,4 +21,4 @@ declare -a ARGS=(
     "--use-neural"
 )
 
-python run.py --n-exp 10 --monitor-loss ${ARGS[$SLURM_ARRAY_TASK_ID]}
+python run.py --n-exp 5 --monitor-loss ${ARGS[$SLURM_ARRAY_TASK_ID]}

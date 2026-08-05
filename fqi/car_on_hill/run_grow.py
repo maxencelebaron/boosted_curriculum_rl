@@ -122,10 +122,16 @@ def _compute_grow_batch(
     td = r + gamma * (1 - done) * q_max
 
     device = next(regressor._model.parameters()).device
+    # All tensors are built from numpy → requires_grad=False by construction.
+    # The no_grad wrapper in the recomputation block after pre_growth_optimize
+
     return (
         torch.FloatTensor(s).to(device),
         torch.LongTensor(a).to(device),
         torch.FloatTensor(td).to(device),
+        torch.FloatTensor(s_next).to(device),
+        torch.FloatTensor(r).to(device),
+        torch.FloatTensor(done).to(device),
     )
 
 
@@ -136,6 +142,10 @@ def _grow_step(
     states: torch.Tensor,
     actions: torch.Tensor,
     td_targets: torch.Tensor,
+    next_states: torch.Tensor,
+    rewards: torch.Tensor,
+    done: torch.Tensor,
+    gamma: float,
     args: Args,
     neurons_per_step: int,
 ) -> dict:
@@ -157,11 +167,23 @@ def _grow_step(
                 q_network.parameters(), lr=args.lr
             )
         initial_loss, final_loss, pre_growth_losses = pre_growth_optimize(
-            q_network, states, actions, td_targets,
-            regressor._optimizer, args.pre_growth_steps,
+            q_network,
+            states,
+            actions,
+            td_targets,
+            regressor._optimizer,
+            args.pre_growth_steps,
         )
         if final_loss < args.bellman_residual_threshold:
-            return {"grew": False, "neurons_added": 0, "pre_growth_losses": pre_growth_losses}
+            return {
+                "grew": False,
+                "neurons_added": 0,
+                "pre_growth_losses": pre_growth_losses
+            }
+        # Recompute TD targets with the updated network weights before growing
+        with torch.no_grad():
+            q_next_fresh = q_network(next_states).max(dim=1)[0]
+            td_targets = rewards + gamma * (1 - done) * q_next_fresh
 
     if growth_mode == "random":
         new_h = q_network.encoder[0].out_features + neurons_per_step
@@ -315,17 +337,28 @@ def experiment(exp_id: int, args: Args) -> tuple:
             with open('data/dataset_%1.3f.pkl' % mdp._m, 'wb') as f:
                 pickle.dump(dataset, f)
 
-        # Grow network at task transition using previous task's dataset
+        # Grow network at task transition using the new task's dataset
         if i > 0:
             regressor = agent.approximator.model[i if args.use_boosting else 0]
-            states_g, actions_g, td_g = _compute_grow_batch(
-                prev_dataset, regressor, mdps[i - 1].info.gamma,
+            states_g, actions_g, td_g, next_states_g, rewards_g, done_g = _compute_grow_batch(
+                dataset,
+                regressor,
+                gamma,
                 args.grow_batch_size,
             )
             feature_split = regressor._model.encoder_size
             pending_growth_info = _grow_step(
-                args.growth_mode, module, regressor,
-                states_g, actions_g, td_g, args,
+                args.growth_mode,
+                module,
+                regressor,
+                states_g,
+                actions_g,
+                td_g,
+                next_states_g,
+                rewards_g,
+                done_g,
+                gamma,
+                args,
                 neurons_per_step,
             )
 
@@ -400,13 +433,25 @@ def experiment(exp_id: int, args: Args) -> tuple:
                 pending_growth_info = None
 
             if len(ms) == 1 and (it + 1) % growth_freq == 0 and (it + 1) < args.iters_per_env:
-                states_g, actions_g, td_g = _compute_grow_batch(
-                    dataset, regressor, gamma, args.grow_batch_size,
+                states_g, actions_g, td_g, next_states_g, rewards_g, done_g = _compute_grow_batch(
+                    dataset,
+                    regressor,
+                    gamma,
+                    args.grow_batch_size,
                 )
                 feature_split = regressor._model.encoder_size
                 growth_info = _grow_step(
-                    args.growth_mode, module, regressor,
-                    states_g, actions_g, td_g, args,
+                    args.growth_mode,
+                    module,
+                    regressor,
+                    states_g,
+                    actions_g,
+                    td_g,
+                    next_states_g,
+                    rewards_g,
+                    done_g,
+                    gamma,
+                    args,
                     neurons_per_step,
                 )
                 if growth_info["grew"]:

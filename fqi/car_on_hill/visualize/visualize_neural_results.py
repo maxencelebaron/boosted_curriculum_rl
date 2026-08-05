@@ -20,11 +20,11 @@ def plot_lines(ax, data, color):
     ax.fill_between(x, mean - std, mean + std, color=color, alpha=0.2)
     l1, = ax.plot(x, mean, color=color, linewidth=1.5)
 
-    return l1
+    return l1, mean
 
 
 def visualize_evolution(path=None, residuals=False, fontsize=6, ticksize=6, axsize=(0.17, 0.215, 0.825, 0.7),
-                        yoffset=0.035, suffix=""):
+                        yoffset=0.035, suffix="", ylim=None, legend_loc="best"):
     fig = plt.figure(figsize=(2.56, 1.5))
     ax = fig.add_axes(axsize)
 
@@ -36,12 +36,17 @@ def visualize_evolution(path=None, residuals=False, fontsize=6, ticksize=6, axsi
     curriculum_data = np.load(os.path.join(f"logs/neural_no_boosted_curriculum{suf}", filename))
     default_data = np.load(os.path.join(f"logs/neural_no_boosted_no_curriculum{suf}", filename))
 
-    l1 = plot_lines(ax, boosted_curriculum_data, "C0")
-    l2 = plot_lines(ax, boosted_data, "C1")
-    l3 = plot_lines(ax, curriculum_data, "C2")
-    l4 = plot_lines(ax, default_data, "C3")
+    l1, m1 = plot_lines(ax, boosted_curriculum_data, "C0")
+    l2, m2 = plot_lines(ax, boosted_data, "C1")
+    l3, m3 = plot_lines(ax, curriculum_data, "C2")
+    l4, m4 = plot_lines(ax, default_data, "C3")
 
-    ylim = ax.get_ylim()
+    if ylim is None:
+        all_means = np.concatenate([m1, m2, m3, m4])
+        lo, hi = np.percentile(all_means, 2), np.percentile(all_means, 98)
+        margin = 0.05 * (hi - lo)
+        ylim = (lo - margin, hi + margin)
+
     plt.vlines([20, 40], *ylim, color="black", linestyle="--", linewidths=[2, 2], alpha=0.5)
     patch = Rectangle([0, ylim[0]], 20, ylim[1] - ylim[0], color="black", alpha=0.4)
     fig.gca().add_patch(patch)
@@ -53,7 +58,7 @@ def visualize_evolution(path=None, residuals=False, fontsize=6, ticksize=6, axsi
     plt.text(50, ylim[1] + yoffset, r"$\mathcal{T}_3$", fontsize=ticksize)
 
     plt.legend([l1, l2, l3, l4], ["BC-NeuralFQI", "B-NeuralFQI", "C-NeuralFQI", "NeuralFQI"],
-               fontsize=ticksize, ncol=2)
+               fontsize=ticksize, ncol=2, loc=legend_loc, framealpha=0.75)
 
     plt.xlabel("Iteration", fontsize=fontsize)
     plt.ylabel(r"$\| Q_t^k - Q_t^* \|_{1, \mu}$" if residuals else "Cum. Disc. Return", fontsize=fontsize)

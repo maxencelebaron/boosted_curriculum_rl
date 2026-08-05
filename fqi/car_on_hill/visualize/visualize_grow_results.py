@@ -24,7 +24,7 @@ def plot_lines(ax, data, color, label):
     x = np.linspace(1, mean.shape[0], mean.shape[0])
     ax.fill_between(x, mean - std, mean + std, color=color, alpha=0.2)
     l, = ax.plot(x, mean, color=color, linewidth=1.5, label=label)
-    return l
+    return l, mean
 
 
 def extract_grow_label(folder):
@@ -32,10 +32,26 @@ def extract_grow_label(folder):
     return name.replace("grow_", "").split("_no_boosted")[0]
 
 
+def extract_neural_label(folder):
+    name = os.path.basename(folder)
+    rest = name[len("neural_"):]  # "no_boosted_curriculum_..." or "boosted_no_curriculum_..."
+    boosted = rest.startswith("boosted")
+    after = rest[len("no_boosted_"):] if rest.startswith("no_boosted") else rest[len("boosted_"):]
+    curriculum = after.startswith("curriculum")
+    if boosted and curriculum:
+        return "BC-NeuralFQI"
+    if boosted:
+        return "B-NeuralFQI"
+    if curriculum:
+        return "C-NeuralFQI"
+    return "NeuralFQI"
+
+
 def plot_grow_results(
     logs_subdir, curriculum, filename, ylabel, path=None,
     fontsize=9, ticksize=6,
     axsize=(0.17, 0.215, 0.825, 0.7), yoffset=0.035,
+    ylim=None, legend_loc="best",
 ):
     all_folders = sorted(glob.glob(os.path.join(logs_subdir, "*")))
     all_folders = [f for f in all_folders if os.path.isdir(f)]
@@ -47,6 +63,8 @@ def plot_grow_results(
     fig = plt.figure(figsize=(2.56, 1.5))
     ax = fig.add_axes(axsize)
 
+    all_means = []
+    growth_markers = []  # list of (growth_iters, color)
     grow_idx = 0
     for folder in all_folders:
         npy_path = os.path.join(folder, filename)
@@ -55,13 +73,35 @@ def plot_grow_results(
         name = os.path.basename(folder)
         data = np.load(npy_path)
         if name.startswith("neural_"):
-            plot_lines(ax, data, BASELINE_COLOR, "NeuralFQI")
+            _, m = plot_lines(ax, data, BASELINE_COLOR, extract_neural_label(folder))
+            all_means.append(m)
         elif name.startswith("grow_"):
+            color = GROW_COLORS[grow_idx % len(GROW_COLORS)]
             label = extract_grow_label(folder)
-            plot_lines(ax, data, GROW_COLORS[grow_idx % len(GROW_COLORS)], label)
+            _, m = plot_lines(ax, data, color, label)
+            all_means.append(m)
+
+            grew_path = os.path.join(folder, "metric_grew.npy")
+            if os.path.exists(grew_path):
+                grew = np.load(grew_path).astype(float)  # (n_exp, n_iters)
+                # iterations (1-indexed) where at least one experiment grew
+                grew_iters = np.where(np.nanmean(grew, axis=0) > 0)[0] + 1
+                growth_markers.append((grew_iters, color))
+
             grow_idx += 1
 
-    ylim = ax.get_ylim()
+    if ylim is None:
+        if all_means:
+            all_m = np.concatenate(all_means)
+            lo, hi = np.percentile(all_m, 2), np.percentile(all_m, 98)
+            margin = 0.05 * (hi - lo)
+            ylim = (lo - margin, hi + margin)
+        else:
+            ylim = ax.get_ylim()
+
+    all_growth_iters = sorted({it for grew_iters, _ in growth_markers for it in grew_iters})
+    if all_growth_iters:
+        ax.vlines(all_growth_iters, *ylim, color="indigo", linestyle="--", linewidth=0.7, alpha=0.6)
 
     if curriculum:
         plt.vlines(
@@ -78,7 +118,7 @@ def plot_grow_results(
         plt.text(30, ylim[1] + yoffset, r"$\mathcal{T}_2$", fontsize=ticksize)
         plt.text(50, ylim[1] + yoffset, r"$\mathcal{T}_3$", fontsize=ticksize)
 
-    plt.legend(fontsize=ticksize, ncol=2)
+    plt.legend(fontsize=ticksize, ncol=2, loc=legend_loc, framealpha=0.75)
     plt.xlabel("Iteration", fontsize=fontsize)
     plt.ylabel(ylabel, fontsize=fontsize)
     plt.gca().tick_params(axis="both", which="major", labelsize=ticksize)

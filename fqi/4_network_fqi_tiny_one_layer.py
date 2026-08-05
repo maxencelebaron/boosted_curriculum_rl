@@ -48,6 +48,10 @@ class Q_Network(nn.Module):
             name="q_head",
         )
 
+    @property
+    def encoder_size(self) -> int:
+        return self.encoder.out_features
+
     def encode(self, state: torch.Tensor) -> torch.Tensor:
         return self.encoder(self.h1(state.float()))
 

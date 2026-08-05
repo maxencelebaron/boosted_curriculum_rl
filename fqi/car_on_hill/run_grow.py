@@ -4,7 +4,8 @@ import importlib
 import tyro
 import pathlib
 import pickle
-from dataclasses import dataclass
+import yaml
+from dataclasses import dataclass, asdict
 
 import numpy as np
 import torch
@@ -13,7 +14,7 @@ from tqdm import trange
 
 from fqi.neural_fqi import BoostedNeuralFQI, NeuralFQI
 from fqi.car_on_hill.solver import solve_car_on_hill
-from fqi.utils.growing_network import pre_growth_optimize
+from fqi.utils.growing_network import pre_growth_optimize, compute_metrics
 
 from mushroom_rl.core import Core, Logger
 from mushroom_rl.environments.car_on_hill import CarOnHill
@@ -58,18 +59,6 @@ class Args:
 
     feature_rank_n_states: int = 2_000
     """number of states to collect for periodic feature rank monitoring"""
-    return_window_size: int = 100
-    """number of episodes for the rolling mean of episodic return"""
-    compute_final_feature_rank: bool = False
-    """if toggled, compute feature rank over a policy rollout after training"""
-    plasticity_n_steps: int = 2_000
-    """number of gradient steps per probe task in plasticity measurement"""
-    plasticity_n_tasks: int = 10
-    """number of random probe tasks for plasticity measurement"""
-    plasticity_n_samples: int = 1_000
-    """number of replay buffer samples for plasticity measurement"""
-    plasticity_final_n_tasks: int = 50
-    """number of random probe tasks for the final plasticity measurement"""
 
     # Network growth
     initial_hidden: int = 128
@@ -149,26 +138,30 @@ def _grow_step(
     td_targets: torch.Tensor,
     args: Args,
     neurons_per_step: int,
-) -> None:
+) -> dict:
     """
     Optionally update the current weights, then grow according to growth_mode.
     Resets the optimizer after any structural change.
 
     neurons_per_step = (final_hidden - initial_hidden) // n_growth_events
+
+    Returns a dict with keys: grew, neurons_added, pre_growth_losses.
     """
     q_network = regressor._model
+    hidden_size_before = regressor._model.encoder_size
+    pre_growth_losses = []
 
     if args.pre_growth_steps > 0:
         if regressor._optimizer is None:
             regressor._optimizer = torch.optim.Adam(
                 q_network.parameters(), lr=args.lr
             )
-        initial_loss, final_loss = pre_growth_optimize(
+        initial_loss, final_loss, pre_growth_losses = pre_growth_optimize(
             q_network, states, actions, td_targets,
             regressor._optimizer, args.pre_growth_steps,
         )
         if final_loss < args.bellman_residual_threshold:
-            return
+            return {"grew": False, "neurons_added": 0, "pre_growth_losses": pre_growth_losses}
 
     if growth_mode == "random":
         new_h = q_network.encoder[0].out_features + neurons_per_step
@@ -196,6 +189,10 @@ def _grow_step(
             statistical_threshold=args.statistical_threshold,
         )
         regressor._optimizer = None
+
+    hidden_size_after = regressor._model.encoder_size
+    neurons_added = hidden_size_after - hidden_size_before
+    return {"grew": neurons_added > 0, "neurons_added": neurons_added, "pre_growth_losses": pre_growth_losses}
 
 
 def experiment(exp_id: int, args: Args) -> tuple:
@@ -292,8 +289,12 @@ def experiment(exp_id: int, args: Args) -> tuple:
 
     js, diff_qs = [], []
     all_losses = [] if args.monitor_loss else None
+    all_pre_growth_losses = [] if args.monitor_loss else None
     all_q_errors = [] if args.monitor_loss else None
+    all_metrics = []
     prev_dataset = None
+    feature_split = 0
+    pending_growth_info = None
 
     for i, mdp in enumerate(mdps):
         logger.info('TASK: %d\n-------' % i)
@@ -302,6 +303,7 @@ def experiment(exp_id: int, args: Args) -> tuple:
 
         core = Core(agent, mdp)
         gamma = mdp.info.gamma
+        monitoring_data = None
 
         try:
             with open('data/dataset_%1.3f.pkl' % mdp._m, 'rb') as f:
@@ -320,7 +322,8 @@ def experiment(exp_id: int, args: Args) -> tuple:
                 prev_dataset, regressor, mdps[i - 1].info.gamma,
                 args.grow_batch_size,
             )
-            _grow_step(
+            feature_split = regressor._model.encoder_size
+            pending_growth_info = _grow_step(
                 args.growth_mode, module, regressor,
                 states_g, actions_g, td_g, args,
                 neurons_per_step,
@@ -361,15 +364,58 @@ def experiment(exp_id: int, args: Args) -> tuple:
                 regressor.epoch_callback = None
                 all_q_errors.append(q_epoch)
 
+            # Fix monitoring batch on first call per task, then compute metrics
+            if monitoring_data is None:
+                states_all, actions_all, rewards_all, next_states_all, absorbing_all, _ = parse_dataset(dataset)
+                n_mon = min(args.feature_rank_n_states, len(states_all))
+                monitoring_data = dict(
+                    states=torch.FloatTensor(states_all[:n_mon]),
+                    actions=torch.LongTensor(actions_all[:n_mon].reshape(-1)),
+                    next_states=next_states_all[:n_mon],
+                    rewards=rewards_all[:n_mon],
+                    absorbing=absorbing_all[:n_mon],
+                )
+            q_next_mon = regressor.predict(monitoring_data['next_states']).max(axis=1)
+            td_mon = (
+                monitoring_data['rewards']
+                + gamma * (1 - monitoring_data['absorbing']) * q_next_mon
+            )
+            metrics = compute_metrics(
+                model=regressor._model,
+                monitoring_states=monitoring_data['states'],
+                monitoring_actions=monitoring_data['actions'],
+                monitoring_targets=torch.FloatTensor(td_mon),
+                feature_split=feature_split,
+            )
+
+            metrics["hidden_size"] = regressor._model.encoder_size
+
+            # Consume task-boundary growth info (attach to first available iteration)
+            if pending_growth_info is not None:
+                if pending_growth_info["grew"]:
+                    metrics["grew"] = True
+                    metrics["neurons_added"] = pending_growth_info["neurons_added"]
+                    if args.monitor_loss:
+                        all_pre_growth_losses.append(pending_growth_info["pre_growth_losses"])
+                pending_growth_info = None
+
             if len(ms) == 1 and (it + 1) % growth_freq == 0 and (it + 1) < args.iters_per_env:
                 states_g, actions_g, td_g = _compute_grow_batch(
                     dataset, regressor, gamma, args.grow_batch_size,
                 )
-                _grow_step(
+                feature_split = regressor._model.encoder_size
+                growth_info = _grow_step(
                     args.growth_mode, module, regressor,
                     states_g, actions_g, td_g, args,
                     neurons_per_step,
                 )
+                if growth_info["grew"]:
+                    metrics["grew"] = True
+                    metrics["neurons_added"] = growth_info["neurons_added"]
+                    if args.monitor_loss:
+                        all_pre_growth_losses.append(growth_info["pre_growth_losses"])
+
+            all_metrics.append(metrics)
 
             test_dataset = core.evaluate(initial_states=test_states, quiet=True)
             j_task.append(np.mean(compute_J(test_dataset, gamma)))
@@ -380,7 +426,7 @@ def experiment(exp_id: int, args: Args) -> tuple:
         diff_qs.append(diff_q_task)
         prev_dataset = dataset
 
-    return js, diff_qs, all_losses, all_q_errors, fit_params
+    return js, diff_qs, all_losses, all_pre_growth_losses, all_q_errors, all_metrics, fit_params
 
 
 if __name__ == '__main__':
@@ -398,8 +444,10 @@ if __name__ == '__main__':
     Js = [o[0] for o in out]
     Qs = [o[1] for o in out]
     Losses = [o[2] for o in out]
-    Q_errors = [o[3] for o in out]
-    fit_params = out[0][4]
+    Pre_growth_losses = [o[3] for o in out]
+    Q_errors = [o[4] for o in out]
+    all_exp_metrics = [o[5] for o in out]
+    fit_params = out[0][6]
 
     boost = 'boosted' if args.use_boosting else 'no_boosted'
     cur = 'curriculum' if args.use_curriculum else 'no_curriculum'
@@ -411,6 +459,10 @@ if __name__ == '__main__':
     )
     print(f"Output folder: {folder_name}")
     pathlib.Path(folder_name).mkdir(parents=True, exist_ok=True)
+    config = asdict(args)
+    config['ms'] = _ms_for_args(args)
+    with open(folder_name + '/config.yaml', 'w') as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
     np.save(folder_name + '/J.npy', Js)
     np.save(folder_name + '/Q.npy', Qs)
@@ -420,6 +472,20 @@ if __name__ == '__main__':
             folder_name + '/q_errors_per_epoch.npy',
             np.array(Q_errors, dtype=float),
         )
+        if args.pre_growth_steps > 0 and Pre_growth_losses and Pre_growth_losses[0]:
+            np.save(
+                folder_name + '/pre_growth_losses.npy',
+                np.array(Pre_growth_losses, dtype=float),
+            )
 
     print('J: ', np.mean(Js, 0))
     print('Q diff: ', np.mean(Qs, 0))
+
+    if all_exp_metrics and all_exp_metrics[0]:
+        metric_keys = list(all_exp_metrics[0][0].keys())
+        for key in metric_keys:
+            vals = np.array(
+                [[m.get(key, np.nan) for m in exp_metrics] for exp_metrics in all_exp_metrics],
+                dtype=float,
+            )
+            np.save(folder_name + f'/metric_{key}.npy', vals)

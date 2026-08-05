@@ -1,6 +1,7 @@
 import argparse
 import pathlib
 import pickle
+import yaml
 
 from joblib import Parallel, delayed
 from fqi.fast_extra_tress import FastExtraTreesActionRegressor
@@ -196,7 +197,7 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
         diff_qs.append(diff_q_task)
         all_depths.append(depth_task)
 
-    return js, diff_qs, all_losses, all_q_errors, all_depths, fit_params
+    return js, diff_qs, all_losses, all_q_errors, all_depths, fit_params, approximator_params, approximator_cls.__name__
 
 
 if __name__ == '__main__':
@@ -242,6 +243,8 @@ if __name__ == '__main__':
     Q_errors = [o[3] for o in out]
     Depths = [o[4] for o in out]
     fit_params = out[0][5]
+    approximator_params = out[0][6]
+    approximator_cls_name = out[0][7]
 
     # Summary folder
     if args.use_neural:
@@ -261,6 +264,23 @@ if __name__ == '__main__':
         print("=========================")
     print(f"Output folder: {folder_name}")
     pathlib.Path(folder_name).mkdir(parents=True, exist_ok=True)
+    config = {
+        'approximator': approximator_cls_name,
+        'use_curriculum': args.use_curriculum,
+        'use_boosting': args.use_boosting,
+        'use_neural': args.use_neural,
+        'n_exp': args.n_exp,
+        'ms': ms,
+        'iters_per_env': iters_per_env,
+        'approximator_params': {
+            k: list(v) if isinstance(v, tuple) else v
+            for k, v in approximator_params.items()
+            if k != 'random_state'
+        },
+        'fit_params': fit_params,
+    }
+    with open(folder_name + '/config.yaml', 'w') as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
     np.save(folder_name + '/J.npy', Js)
     np.save(folder_name + '/Q.npy', Qs)
     np.save(folder_name + '/depths.npy', np.array(Depths))

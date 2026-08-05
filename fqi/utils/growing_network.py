@@ -121,6 +121,85 @@ def bellman_residual_correlation(phi_new: np.ndarray, R: np.ndarray) -> float:
     return float(np.linalg.norm(phi_new.T @ R, 'fro'))
 
 
+def compute_metrics(
+    model: nn.Module,
+    monitoring_states: torch.Tensor,
+    monitoring_actions: torch.Tensor,
+    monitoring_targets: torch.Tensor,
+    feature_split: int = 0,
+) -> dict:
+    """
+    Compute feature rank, srank, old/new neuron split metrics.
+
+    monitoring_targets should be fresh TD targets for the monitoring states,
+    recomputed from the current network at each call.
+
+    Returns a dict of scalar metrics. Keys present unconditionally:
+        rank, rank_ratio, srank, srank_ratio.
+    Keys present only when feature_split > 0:
+        rank_old, rank_new, rank_ratio_old, rank_ratio_new,
+        srank_old, srank_new, srank_ratio_old, srank_ratio_new,
+        angles_min, angles_max, angles_mean, brc.
+    """
+    device = next(model.parameters()).device
+    mon_states = monitoring_states.to(device)
+    mon_actions = monitoring_actions.to(device)
+    mon_targets = monitoring_targets.to(device)
+
+    model.eval()
+    with torch.no_grad():
+        features = model.encode(mon_states).cpu().numpy()
+
+    with torch.no_grad():
+        q_pred = model(mon_states).gather(1, mon_actions.unsqueeze(1)).squeeze().cpu().numpy()
+    bellman_residual = float(np.mean((mon_targets.cpu().numpy() - q_pred) ** 2))
+
+    rank, svs = feature_rank(features)
+    feature_dim = features.shape[1]
+    sr = srank(svs)
+
+    result = {
+        "bellman_residual": bellman_residual,
+        "rank": rank,
+        "rank_ratio": rank / feature_dim,
+        "srank": sr,
+        "srank_ratio": sr / feature_dim,
+    }
+
+    if 0 < feature_split < feature_dim:
+        phi = features[:, :feature_split]
+        phi_new = features[:, feature_split:]
+
+        rank_old, svs_old = feature_rank(phi)
+        rank_new, svs_new = feature_rank(phi_new)
+        sr_old = srank(svs_old)
+        sr_new = srank(svs_new)
+        cosines = principal_angle_cosines(phi, phi_new)
+
+        with torch.no_grad():
+            q_brc = model(mon_states).gather(1, mon_actions.unsqueeze(1)).squeeze().cpu().numpy()
+        r_brc = (mon_targets.cpu().numpy() - q_brc).reshape(-1, 1)
+        brc = bellman_residual_correlation(phi_new, r_brc)
+
+        result.update({
+            "rank_old": rank_old,
+            "rank_new": rank_new,
+            "rank_ratio_old": rank_old / phi.shape[1],
+            "rank_ratio_new": rank_new / phi_new.shape[1],
+            "srank_old": sr_old,
+            "srank_new": sr_new,
+            "srank_ratio_old": sr_old / phi.shape[1],
+            "srank_ratio_new": sr_new / phi_new.shape[1],
+            "angles_min": float(cosines.min()),
+            "angles_max": float(cosines.max()),
+            "angles_mean": float(cosines.mean()),
+            "brc": brc,
+        })
+
+    model.train()
+    return result
+
+
 def pre_growth_optimize(
     network: nn.Module,
     states: torch.Tensor,
@@ -128,29 +207,28 @@ def pre_growth_optimize(
     td_targets: torch.Tensor,
     optimizer,
     n_steps: int,
-) -> tuple[float, float]:
+) -> tuple[float, float, list[float]]:
     """
     Run n_steps of Bellman backprop on a fixed batch before deciding whether to grow.
 
     Optimizes L = (1/n)||T^π Q - Φ(W)·θ^T||² jointly over all network weights.
 
-    Returns (initial_loss, final_loss). The network and optimizer
+    Returns (initial_loss, final_loss, loss_history). The network and optimizer
     are updated in place, so W* and θ* are retained for the subsequent growth step.
     """
     _actions = actions.unsqueeze(1)
-    initial_loss = None
+    loss_history = []
     loss = None
-    for step in range(n_steps):
+    for _ in range(n_steps):
         phi = network.encode(states)
         old_val = network.q_head(phi).gather(1, _actions).squeeze()
         loss = F.mse_loss(td_targets, old_val)
-        if step == 0:
-            initial_loss = loss.item()
+        loss_history.append(loss.item())
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-    return initial_loss, loss.item()
+    return loss_history[0], loss.item(), loss_history
 
 
 @torch.no_grad()

@@ -46,10 +46,10 @@ lines.append("=" * 60)
 with open("data/dataset_analysis.txt", "w") as f:
     f.write("\n".join(lines) + "\n")
 
-# ── Figures ───────────────────────────────────────────────────────────────────
+# Figures
 fig = plt.figure(figsize=(16, 10))
 fig.suptitle("Car-on-Hill offline datasets (random policy)", fontsize=14)
-gs = gridspec.GridSpec(3, 4, figure=fig, hspace=0.45, wspace=0.35)
+gs = gridspec.GridSpec(3, 3, figure=fig, hspace=0.45, wspace=0.35)
 
 colors = {0.800: '#1f77b4', 1.000: '#ff7f0e', 1.200: '#2ca02c'}
 
@@ -65,7 +65,7 @@ for row, (m, dataset) in enumerate(datasets.items()):
     plt.colorbar(sc, ax=ax, shrink=0.8)
     ax.set_xlabel("position")
     ax.set_ylabel("velocity")
-    ax.set_title(f"{label} — state coverage")
+    ax.set_title(f"{label} - state coverage")
 
     # 2. Reward distribution (bar)
     ax2 = fig.add_subplot(gs[row, 1])
@@ -73,7 +73,7 @@ for row, (m, dataset) in enumerate(datasets.items()):
     ax2.bar([str(int(v)) for v in vals], cnts / len(rewards) * 100, color=c)
     ax2.set_xlabel("reward")
     ax2.set_ylabel("% transitions")
-    ax2.set_title(f"{label} — reward distribution")
+    ax2.set_title(f"{label} - reward distribution")
 
     # 3. Episode-length histogram
     ep_lengths = np.diff(np.where(last)[0], prepend=-1)
@@ -81,17 +81,8 @@ for row, (m, dataset) in enumerate(datasets.items()):
     ax3.hist(ep_lengths, bins=30, color=c, edgecolor='white', linewidth=0.4)
     ax3.set_xlabel("episode length (steps)")
     ax3.set_ylabel("count")
-    ax3.set_title(f"{label} — episode lengths")
+    ax3.set_title(f"{label} - episode lengths")
 
-    # 4. State distribution (2-D histogram)
-    ax4 = fig.add_subplot(gs[row, 3])
-    h, xedges, yedges = np.histogram2d(states[:, 0], states[:, 1], bins=40)
-    ax4.imshow(np.log1p(h.T), origin='lower', aspect='auto',
-               extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]],
-               cmap='Blues')
-    ax4.set_xlabel("position")
-    ax4.set_ylabel("velocity")
-    ax4.set_title(f"{label} — state density (log)")
 
 plt.savefig("data/dataset_analysis.png", dpi=150, bbox_inches='tight')
 plt.close()

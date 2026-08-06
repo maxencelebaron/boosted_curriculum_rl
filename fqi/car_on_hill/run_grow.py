@@ -65,8 +65,12 @@ class Args:
     """initial encoder hidden size"""
     final_hidden: int = 256
     """target encoder hidden size after all growth events"""
-    grow_every: int = 20
-    """FQI iterations between growth events (no-curriculum only)"""
+    n_growth_events: int = 2
+    """total number of growth events"""
+    growth_start: int = 0
+    """global iteration of first growth event (0 = auto: total_iters / (n+1))"""
+    growth_end: int = 0
+    """global iteration of last growth event (0 = auto: total_iters * n / (n+1))"""
     pre_growth_steps: int = 10
     """gradient steps to update current weights before growing"""
     grow_batch_size: int = 1000
@@ -85,6 +89,16 @@ def _ms_for_args(args: Args) -> list[float]:
     if args.use_boosting:
         return [1.2, 1.2, 1.2]
     return [1.2]
+
+
+def _growth_schedule(n_events: int, start: int, end: int) -> set:
+    """
+    Returns the set of global iteration indices at which growth should occur.
+    Events are evenly spaced between start and end (both inclusive).
+
+    Example: n_events=6, start=10, end=20 → {10, 12, 14, 16, 18, 20}
+    """
+    return set(np.round(np.linspace(start, end, n_events)).astype(int))
 
 
 def _compute_grow_batch(
@@ -226,8 +240,11 @@ def experiment(exp_id: int, args: Args) -> tuple:
 
     ms = _ms_for_args(args)
     total_iters = len(ms) * args.iters_per_env
-    n_growth_events = (total_iters - 1) // args.grow_every
-    neurons_per_step = (args.final_hidden - args.initial_hidden) // max(1, n_growth_events)
+    n = args.n_growth_events
+    g_start = args.growth_start if args.growth_start > 0 else total_iters // (n + 1)
+    g_end   = args.growth_end   if args.growth_end   > 0 else total_iters * n // (n + 1)
+    growth_iters = _growth_schedule(n, g_start, g_end)
+    neurons_per_step = (args.final_hidden - args.initial_hidden) // max(1, n)
     alg = BoostedNeuralFQI if args.use_boosting else NeuralFQI
 
     logger = Logger(alg.__name__, results_dir=None)
@@ -399,7 +416,7 @@ def experiment(exp_id: int, args: Args) -> tuple:
 
             metrics["hidden_size"] = regressor._model.encoder_size
 
-            if global_it % args.grow_every == 0 and global_it < total_iters:
+            if global_it in growth_iters:
                 states_g, actions_g, td_g, next_states_g, rewards_g, done_g = _compute_grow_batch(
                     dataset,
                     regressor,
@@ -476,7 +493,7 @@ if __name__ == '__main__':
     subfolder = 'logs_curriculum' if args.use_curriculum else 'logs_no_curriculum'
     folder_name = (
         f'./logs/{subfolder}/grow_{args.growth_mode}_{boost}_{cur}'
-        f'_h{args.initial_hidden}_ge{args.grow_every}'
+        f'_h{args.initial_hidden}_ng{args.n_growth_events}'
         f'_lr{args.lr}_ep{args.n_epochs}_bs{args.batch_size}'
     )
     print(f"Output folder: {folder_name}")

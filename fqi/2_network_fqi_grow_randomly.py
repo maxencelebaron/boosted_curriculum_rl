@@ -25,11 +25,11 @@ class Q_Network(nn.Module):
     def __init__(self, hidden_size: int):
         super().__init__()
         self.h1 = nn.Sequential(
-            nn.Linear(2, 256),
+            nn.Linear(2, 445),
             nn.Tanh()
         )
         self.encoder = nn.Sequential(
-            nn.Linear(256, hidden_size),
+            nn.Linear(445, hidden_size),
             nn.Tanh()
         )
         self.q_head = nn.Linear(hidden_size, 2)

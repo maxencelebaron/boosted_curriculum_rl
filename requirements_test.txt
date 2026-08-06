@@ -5,4 +5,5 @@ scikit-learn
 matplotlib
 pynput
 tyro==1.0.15
+PyYAML
 -e ../gromo

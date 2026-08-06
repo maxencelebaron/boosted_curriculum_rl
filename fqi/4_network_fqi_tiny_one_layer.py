@@ -33,12 +33,12 @@ class Q_Network(nn.Module):
         super().__init__()
         self.h1 = nn.Sequential(
             nn.Linear(2, 256),
-            nn.Sigmoid()
+            nn.Tanh()
         )
         self.encoder = LinearGrowingModule(
             in_features=256,
             out_features=hidden_size,
-            post_layer_function=nn.Sigmoid(),
+            post_layer_function=nn.Tanh(),
             name="encoder",
         )
         self.q_head = LinearGrowingModule(

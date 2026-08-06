@@ -215,7 +215,8 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
         all_bias_max.append(bias_max_task)
         all_depths.append(depth_task)
 
-    return js, diff_qs, all_bias_sa, all_bias_max, all_losses, all_q_errors, all_depths, fit_params, approximator_params, approximator_cls.__name__
+    model_arch = str(agent.approximator.model[0]._model) if neural else None
+    return js, diff_qs, all_bias_sa, all_bias_max, all_losses, all_q_errors, all_depths, fit_params, approximator_params, approximator_cls.__name__, model_arch
 
 
 if __name__ == '__main__':
@@ -265,6 +266,7 @@ if __name__ == '__main__':
     fit_params = out[0][7]
     approximator_params = out[0][8]
     approximator_cls_name = out[0][9]
+    model_arch = out[0][10]
 
     # Summary folder
     if args.use_neural:
@@ -298,6 +300,7 @@ if __name__ == '__main__':
             if k != 'random_state'
         },
         'fit_params': fit_params,
+        'model_architecture': model_arch,
     }
     with open(folder_name + '/config.yaml', 'w') as f:
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)

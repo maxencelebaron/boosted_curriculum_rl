@@ -225,11 +225,9 @@ def experiment(exp_id: int, args: Args) -> tuple:
     module = importlib.import_module(GROWTH_MODULES[args.growth_mode])
 
     ms = _ms_for_args(args)
-    n_growth_events = (
-        len(ms) - 1 if len(ms) > 1
-        else (args.iters_per_env - 1) // args.grow_every
-    )
-    neurons_per_step = (args.final_hidden - args.initial_hidden) // n_growth_events
+    total_iters = len(ms) * args.iters_per_env
+    n_growth_events = (total_iters - 1) // args.grow_every
+    neurons_per_step = (args.final_hidden - args.initial_hidden) // max(1, n_growth_events)
     alg = BoostedNeuralFQI if args.use_boosting else NeuralFQI
 
     logger = Logger(alg.__name__, results_dir=None)
@@ -307,16 +305,18 @@ def experiment(exp_id: int, args: Args) -> tuple:
         n_iterations=1,
     )
 
-    growth_freq = args.grow_every
+    def _print_model(regressor, label: str):
+        print(f"\n[Model {label}]\n{regressor._model}\n")
+
+    _print_model(agent.approximator.model[0], "@ init")
 
     js, diff_qs, bias_sas, bias_maxs = [], [], [], []
     all_losses = [] if args.monitor_loss else None
     all_pre_growth_losses = [] if args.monitor_loss else None
     all_q_errors = [] if args.monitor_loss else None
     all_metrics = []
-    prev_dataset = None
     feature_split = 0
-    pending_growth_info = None
+    global_it = 0
 
     for i, mdp in enumerate(mdps):
         logger.info('TASK: %d\n-------' % i)
@@ -337,31 +337,6 @@ def experiment(exp_id: int, args: Args) -> tuple:
             with open('data/dataset_%1.3f.pkl' % mdp._m, 'wb') as f:
                 pickle.dump(dataset, f)
 
-        # Grow network at task transition using the new task's dataset
-        if i > 0:
-            regressor = agent.approximator.model[i if args.use_boosting else 0]
-            states_g, actions_g, td_g, next_states_g, rewards_g, done_g = _compute_grow_batch(
-                dataset,
-                regressor,
-                gamma,
-                args.grow_batch_size,
-            )
-            feature_split = regressor._model.encoder_size
-            pending_growth_info = _grow_step(
-                args.growth_mode,
-                module,
-                regressor,
-                states_g,
-                actions_g,
-                td_g,
-                next_states_g,
-                rewards_g,
-                done_g,
-                gamma,
-                args,
-                neurons_per_step,
-            )
-
         j_task, diff_q_task, bias_sa_task, bias_max_task = [], [], [], []
         agent.policy.set_epsilon(test_epsilon)
         ens_idx = np.arange(i + 1) if args.use_boosting else 0
@@ -372,6 +347,7 @@ def experiment(exp_id: int, args: Args) -> tuple:
             disable=False,
             leave=False
         ):
+            global_it += 1
             regressor = agent.approximator.model[i if args.use_boosting else 0]
 
             if args.monitor_loss:
@@ -423,16 +399,7 @@ def experiment(exp_id: int, args: Args) -> tuple:
 
             metrics["hidden_size"] = regressor._model.encoder_size
 
-            # Consume task-boundary growth info (attach to first available iteration)
-            if pending_growth_info is not None:
-                if pending_growth_info["grew"]:
-                    metrics["grew"] = True
-                    metrics["neurons_added"] = pending_growth_info["neurons_added"]
-                    if args.monitor_loss:
-                        all_pre_growth_losses.append(pending_growth_info["pre_growth_losses"])
-                pending_growth_info = None
-
-            if len(ms) == 1 and (it + 1) % growth_freq == 0 and (it + 1) < args.iters_per_env:
+            if global_it % args.grow_every == 0 and global_it < total_iters:
                 states_g, actions_g, td_g, next_states_g, rewards_g, done_g = _compute_grow_batch(
                     dataset,
                     regressor,
@@ -455,6 +422,7 @@ def experiment(exp_id: int, args: Args) -> tuple:
                     neurons_per_step,
                 )
                 if growth_info["grew"]:
+                    _print_model(regressor, f"after growth (global_it={global_it}, +{growth_info['neurons_added']} neurons)")
                     metrics["grew"] = True
                     metrics["neurons_added"] = growth_info["neurons_added"]
                     if args.monitor_loss:
@@ -477,7 +445,6 @@ def experiment(exp_id: int, args: Args) -> tuple:
         diff_qs.append(diff_q_task)
         bias_sas.append(bias_sa_task)
         bias_maxs.append(bias_max_task)
-        prev_dataset = dataset
 
     return js, diff_qs, bias_sas, bias_maxs, all_losses, all_pre_growth_losses, all_q_errors, all_metrics, fit_params
 

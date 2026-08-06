@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=grow_%a
+#SBATCH --job-name=grow_boost_%a
 #SBATCH -C a100
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
@@ -15,7 +15,11 @@ module load arch/a100
 
 export PYTHONPATH=$PYTHONPATH:$PWD/../..
 
-COMMON="--n-exp 5 --n-jobs 1 --monitor-loss"
+COMMON="--n-exp 5 --n-jobs 1 --monitor-loss \
+        --use-boosting \
+        --lr 2e-3 --n-epochs 70 --batch-size 50 \
+        --initial_hidden 128 \
+        --final_hidden 256"
 
 declare -a CMDS=(
     "python run_grow.py --use-curriculum --growth-mode random          $COMMON"
@@ -23,9 +27,9 @@ declare -a CMDS=(
     "python run_grow.py --use-curriculum --growth-mode gromo_one_layer $COMMON"
     "python run.py --use-curriculum --use-neural                       $COMMON"
     "python run.py --use-neural                                        $COMMON"
-    "python run_grow.py --growth-mode random          --iters-per-env 60 $COMMON"
-    "python run_grow.py --growth-mode svd             --iters-per-env 60 $COMMON"
-    "python run_grow.py --growth-mode gromo_one_layer --iters-per-env 60 $COMMON"
+    "python run_grow.py --growth-mode random                           $COMMON"
+    "python run_grow.py --growth-mode svd                              $COMMON"
+    "python run_grow.py --growth-mode gromo_one_layer                  $COMMON"
 )
 
 eval "${CMDS[$SLURM_ARRAY_TASK_ID]}"

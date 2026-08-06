@@ -309,7 +309,7 @@ def experiment(exp_id: int, args: Args) -> tuple:
 
     growth_freq = args.grow_every
 
-    js, diff_qs = [], []
+    js, diff_qs, bias_sas, bias_maxs = [], [], [], []
     all_losses = [] if args.monitor_loss else None
     all_pre_growth_losses = [] if args.monitor_loss else None
     all_q_errors = [] if args.monitor_loss else None
@@ -362,7 +362,7 @@ def experiment(exp_id: int, args: Args) -> tuple:
                 neurons_per_step,
             )
 
-        j_task, diff_q_task = [], []
+        j_task, diff_q_task, bias_sa_task, bias_max_task = [], [], [], []
         agent.policy.set_epsilon(test_epsilon)
         ens_idx = np.arange(i + 1) if args.use_boosting else 0
 
@@ -467,11 +467,19 @@ def experiment(exp_id: int, args: Args) -> tuple:
             qs = agent.approximator.predict(test_states, test_actions, idx=ens_idx)
             diff_q_task.append(np.linalg.norm(qs - test_q[i], ord=1) / len(qs))
 
+            n_states = len(qs) // 2
+            bias_sa_task.append(np.mean(qs - test_q[i]))
+            q_hat_max = np.maximum(qs[:n_states], qs[n_states:])
+            q_star_max = np.maximum(test_q[i][:n_states], test_q[i][n_states:])
+            bias_max_task.append(np.mean(q_hat_max - q_star_max))
+
         js.append(j_task)
         diff_qs.append(diff_q_task)
+        bias_sas.append(bias_sa_task)
+        bias_maxs.append(bias_max_task)
         prev_dataset = dataset
 
-    return js, diff_qs, all_losses, all_pre_growth_losses, all_q_errors, all_metrics, fit_params
+    return js, diff_qs, bias_sas, bias_maxs, all_losses, all_pre_growth_losses, all_q_errors, all_metrics, fit_params
 
 
 if __name__ == '__main__':
@@ -488,11 +496,13 @@ if __name__ == '__main__':
 
     Js = [o[0] for o in out]
     Qs = [o[1] for o in out]
-    Losses = [o[2] for o in out]
-    Pre_growth_losses = [o[3] for o in out]
-    Q_errors = [o[4] for o in out]
-    all_exp_metrics = [o[5] for o in out]
-    fit_params = out[0][6]
+    Bias_sa = [o[2] for o in out]
+    Bias_max = [o[3] for o in out]
+    Losses = [o[4] for o in out]
+    Pre_growth_losses = [o[5] for o in out]
+    Q_errors = [o[6] for o in out]
+    all_exp_metrics = [o[7] for o in out]
+    fit_params = out[0][8]
 
     boost = 'boosted' if args.use_boosting else 'no_boosted'
     cur = 'curriculum' if args.use_curriculum else 'no_curriculum'
@@ -511,6 +521,8 @@ if __name__ == '__main__':
 
     np.save(folder_name + '/J.npy', Js)
     np.save(folder_name + '/Q.npy', Qs)
+    np.save(folder_name + '/bias_sa.npy', Bias_sa)
+    np.save(folder_name + '/bias_max.npy', Bias_max)
     if args.monitor_loss:
         np.save(folder_name + '/losses.npy', np.array(Losses, dtype=float))
         np.save(

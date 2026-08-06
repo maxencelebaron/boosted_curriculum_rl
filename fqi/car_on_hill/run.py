@@ -47,10 +47,16 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
 
     names = ['%1.3f' % (mdp._m) for mdp in mdps]
 
-    test_states_0 = np.linspace(mdps[0].info.observation_space.low[0],
-                                mdps[0].info.observation_space.high[0], 10)
-    test_states_1 = np.linspace(mdps[0].info.observation_space.low[1],
-                                mdps[0].info.observation_space.high[1], 10)
+    test_states_0 = np.linspace(
+        mdps[0].info.observation_space.low[0],
+        mdps[0].info.observation_space.high[0],
+        10
+    )
+    test_states_1 = np.linspace(
+        mdps[0].info.observation_space.low[1],
+        mdps[0].info.observation_space.high[1],
+        10
+    )
     test_states = list()
     for s0 in test_states_0:
         for s1 in test_states_1:
@@ -130,6 +136,8 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
 
     js = list()
     diff_qs = list()
+    all_bias_sa = list()
+    all_bias_max = list()
     all_depths = list()
     all_losses = list() if (neural and monitor_loss) else None
     all_q_errors = list() if (neural and monitor_loss) else None
@@ -155,6 +163,8 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
 
         j_task = list()
         diff_q_task = list()
+        bias_sa_task = list()
+        bias_max_task = list()
         depth_task = list()
         agent.policy.set_epsilon(test_epsilon)
         idx = np.arange(i + 1) if boosted else 0
@@ -193,11 +203,19 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
             qs = agent.approximator.predict(test_states, test_actions, idx=idx)
             diff_q_task.append(np.linalg.norm(qs - test_q[i], ord=1) / len(qs))
 
+            n_states = len(qs) // 2
+            bias_sa_task.append(np.mean(qs - test_q[i]))
+            q_hat_max = np.maximum(qs[:n_states], qs[n_states:])
+            q_star_max = np.maximum(test_q[i][:n_states], test_q[i][n_states:])
+            bias_max_task.append(np.mean(q_hat_max - q_star_max))
+
         js.append(j_task)
         diff_qs.append(diff_q_task)
+        all_bias_sa.append(bias_sa_task)
+        all_bias_max.append(bias_max_task)
         all_depths.append(depth_task)
 
-    return js, diff_qs, all_losses, all_q_errors, all_depths, fit_params, approximator_params, approximator_cls.__name__
+    return js, diff_qs, all_bias_sa, all_bias_max, all_losses, all_q_errors, all_depths, fit_params, approximator_params, approximator_cls.__name__
 
 
 if __name__ == '__main__':
@@ -239,12 +257,14 @@ if __name__ == '__main__':
         for exp_id in range(args.n_exp))
     Js = [o[0] for o in out]
     Qs = [o[1] for o in out]
-    Losses = [o[2] for o in out]
-    Q_errors = [o[3] for o in out]
-    Depths = [o[4] for o in out]
-    fit_params = out[0][5]
-    approximator_params = out[0][6]
-    approximator_cls_name = out[0][7]
+    Bias_sa = [o[2] for o in out]
+    Bias_max = [o[3] for o in out]
+    Losses = [o[4] for o in out]
+    Q_errors = [o[5] for o in out]
+    Depths = [o[6] for o in out]
+    fit_params = out[0][7]
+    approximator_params = out[0][8]
+    approximator_cls_name = out[0][9]
 
     # Summary folder
     if args.use_neural:
@@ -283,6 +303,8 @@ if __name__ == '__main__':
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
     np.save(folder_name + '/J.npy', Js)
     np.save(folder_name + '/Q.npy', Qs)
+    np.save(folder_name + '/bias_sa.npy', Bias_sa)
+    np.save(folder_name + '/bias_max.npy', Bias_max)
     np.save(folder_name + '/depths.npy', np.array(Depths))
     if args.monitor_loss and args.use_neural:
         np.save(folder_name + '/losses.npy', np.array(Losses, dtype=float))

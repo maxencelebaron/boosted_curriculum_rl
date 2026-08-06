@@ -48,10 +48,17 @@ def extract_neural_label(folder):
 
 
 def plot_grow_results(
-    logs_subdir, curriculum, filename, ylabel, path=None,
-    fontsize=9, ticksize=6,
-    axsize=(0.17, 0.215, 0.825, 0.7), yoffset=0.035,
-    ylim=None, legend_loc="best",
+    logs_subdir,
+    curriculum,
+    filename,
+    ylabel,
+    path=None,
+    fontsize=9,
+    ticksize=6,
+    axsize=(0.17, 0.215, 0.825, 0.7),
+    yoffset=0.035,
+    ylim=None,
+    legend_loc="best",
 ):
     all_folders = sorted(glob.glob(os.path.join(logs_subdir, "*")))
     all_folders = [f for f in all_folders if os.path.isdir(f)]
@@ -143,7 +150,8 @@ if __name__ == "__main__":
         tag = "curriculum" if curriculum else "no_curriculum"
 
         plot_grow_results(
-            subfolder, curriculum,
+            subfolder,
+            curriculum,
             filename="J.npy",
             ylabel="Cum. Disc. Return",
             path=f"figures/car_on_hill_grow_performance_{tag}.pdf",
@@ -151,10 +159,29 @@ if __name__ == "__main__":
             axsize=(0.195, 0.215, 0.78, 0.7), yoffset=0.035,
         )
         plot_grow_results(
-            subfolder, curriculum,
+            subfolder,
+            curriculum,
             filename="Q.npy",
             ylabel=r"$\| Q_t^k - Q_t^* \|_{1, \mu}$",
             path=f"figures/car_on_hill_grow_diff_q_{tag}.pdf",
             fontsize=9, ticksize=6,
             axsize=(0.17, 0.215, 0.805, 0.7), yoffset=0.02,
+        )
+        plot_grow_results(
+            subfolder,
+            curriculum,
+            filename="bias_sa.npy",
+            ylabel=r"$\frac{1}{N}\sum_{s,a}(\hat{Q}(s,a) - Q^*(s,a))$",
+            path=f"figures/car_on_hill_grow_bias_sa_{tag}.pdf",
+            fontsize=9, ticksize=6,
+            axsize=(0.22, 0.215, 0.755, 0.7), yoffset=0.02,
+        )
+        plot_grow_results(
+            subfolder,
+            curriculum,
+            filename="bias_max.npy",
+            ylabel=r"$\frac{1}{|S|}\sum_s(\max_a \hat{Q}(s,a) - \max_a Q^*(s,a))$",
+            path=f"figures/car_on_hill_grow_bias_max_{tag}.pdf",
+            fontsize=9, ticksize=6,
+            axsize=(0.22, 0.215, 0.755, 0.7), yoffset=0.02,
         )

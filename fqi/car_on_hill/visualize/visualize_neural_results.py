@@ -10,6 +10,13 @@ plt.rcParams.update({
 })
 
 
+def _safe_load(path):
+    try:
+        return np.load(path)
+    except FileNotFoundError:
+        return None
+
+
 def plot_lines(ax, data, color):
     reshaped_data = np.concatenate([data[:, i, :] for i in range(0, data.shape[1])], axis=-1)
     mean = np.mean(reshaped_data, axis=0)
@@ -40,18 +47,28 @@ def visualize_evolution(
     filename = "Q.npy" if residuals else "J.npy"
     suf = f"_{suffix}" if suffix else ""
 
-    boosted_curriculum_data = np.load(os.path.join(f"logs/neural_boosted_curriculum{suf}", filename))
-    boosted_data = np.load(os.path.join(f"logs/neural_boosted_no_curriculum{suf}", filename))
-    curriculum_data = np.load(os.path.join(f"logs/neural_no_boosted_curriculum{suf}", filename))
-    default_data = np.load(os.path.join(f"logs/neural_no_boosted_no_curriculum{suf}", filename))
+    datasets = [
+        (_safe_load(os.path.join(f"logs/neural_boosted_curriculum{suf}", filename)), "C0", "BC-NeuralFQI"),
+        (_safe_load(os.path.join(f"logs/neural_boosted_no_curriculum{suf}", filename)), "C1", "B-NeuralFQI"),
+        (_safe_load(os.path.join(f"logs/neural_no_boosted_curriculum{suf}", filename)), "C2", "C-NeuralFQI"),
+        (_safe_load(os.path.join(f"logs/neural_no_boosted_no_curriculum{suf}", filename)), "C3", "NeuralFQI"),
+    ]
 
-    l1, m1 = plot_lines(ax, boosted_curriculum_data, "C0")
-    l2, m2 = plot_lines(ax, boosted_data, "C1")
-    l3, m3 = plot_lines(ax, curriculum_data, "C2")
-    l4, m4 = plot_lines(ax, default_data, "C3")
+    lines, means, labels = [], [], []
+    for data, color, label in datasets:
+        if data is not None:
+            l, m = plot_lines(ax, data, color)
+            lines.append(l)
+            means.append(m)
+            labels.append(label)
+
+    if not means:
+        print(f"No data found for suffix '{suf}', skipping.")
+        plt.close()
+        return
 
     if ylim is None:
-        all_means = np.concatenate([m1, m2, m3, m4])
+        all_means = np.concatenate(means)
         lo, hi = np.percentile(all_means, 2), np.percentile(all_means, 98)
         margin = 0.05 * (hi - lo)
         ylim = (lo - margin, hi + margin)
@@ -66,8 +83,7 @@ def visualize_evolution(
     plt.text(30, ylim[1] + yoffset, r"$\mathcal{T}_2$", fontsize=ticksize)
     plt.text(50, ylim[1] + yoffset, r"$\mathcal{T}_3$", fontsize=ticksize)
 
-    plt.legend([l1, l2, l3, l4], ["BC-NeuralFQI", "B-NeuralFQI", "C-NeuralFQI", "NeuralFQI"],
-               fontsize=ticksize, ncol=2, loc=legend_loc, framealpha=0.75)
+    plt.legend(lines, labels, fontsize=ticksize, ncol=2, loc=legend_loc, framealpha=0.75)
 
     plt.xlabel("Iteration", fontsize=fontsize)
     plt.ylabel(r"$\| Q_t^k - Q_t^* \|_{1, \mu}$" if residuals else "Cum. Disc. Return", fontsize=fontsize)
@@ -99,18 +115,28 @@ def visualize_overestimation(
     filename = "bias_sa.npy" if metric == "sa" else "bias_max.npy"
     suf = f"_{suffix}" if suffix else ""
 
-    boosted_curriculum_data = np.load(os.path.join(f"logs/neural_boosted_curriculum{suf}", filename))
-    boosted_data = np.load(os.path.join(f"logs/neural_boosted_no_curriculum{suf}", filename))
-    curriculum_data = np.load(os.path.join(f"logs/neural_no_boosted_curriculum{suf}", filename))
-    default_data = np.load(os.path.join(f"logs/neural_no_boosted_no_curriculum{suf}", filename))
+    datasets = [
+        (_safe_load(os.path.join(f"logs/neural_boosted_curriculum{suf}", filename)), "C0", "BC-NeuralFQI"),
+        (_safe_load(os.path.join(f"logs/neural_boosted_no_curriculum{suf}", filename)), "C1", "B-NeuralFQI"),
+        (_safe_load(os.path.join(f"logs/neural_no_boosted_curriculum{suf}", filename)), "C2", "C-NeuralFQI"),
+        (_safe_load(os.path.join(f"logs/neural_no_boosted_no_curriculum{suf}", filename)), "C3", "NeuralFQI"),
+    ]
 
-    l1, m1 = plot_lines(ax, boosted_curriculum_data, "C0")
-    l2, m2 = plot_lines(ax, boosted_data, "C1")
-    l3, m3 = plot_lines(ax, curriculum_data, "C2")
-    l4, m4 = plot_lines(ax, default_data, "C3")
+    lines, means, labels = [], [], []
+    for data, color, label in datasets:
+        if data is not None:
+            l, m = plot_lines(ax, data, color)
+            lines.append(l)
+            means.append(m)
+            labels.append(label)
+
+    if not means:
+        print(f"No data found for suffix '{suf}', skipping.")
+        plt.close()
+        return
 
     if ylim is None:
-        all_means = np.concatenate([m1, m2, m3, m4])
+        all_means = np.concatenate(means)
         lo, hi = np.percentile(all_means, 2), np.percentile(all_means, 98)
         margin = 0.05 * (hi - lo)
         ylim = (lo - margin, hi + margin)
@@ -125,13 +151,7 @@ def visualize_overestimation(
     plt.text(30, ylim[1] + yoffset, r"$\mathcal{T}_2$", fontsize=ticksize)
     plt.text(50, ylim[1] + yoffset, r"$\mathcal{T}_3$", fontsize=ticksize)
 
-    plt.legend(
-        [l1, l2, l3, l4], ["BC-NeuralFQI", "B-NeuralFQI", "C-NeuralFQI", "NeuralFQI"],
-        fontsize=ticksize,
-        ncol=2,
-        loc=legend_loc,
-        framealpha=0.75
-    )
+    plt.legend(lines, labels, fontsize=ticksize, ncol=2, loc=legend_loc, framealpha=0.75)
 
     plt.xlabel("Iteration", fontsize=fontsize)
     if metric == "sa":

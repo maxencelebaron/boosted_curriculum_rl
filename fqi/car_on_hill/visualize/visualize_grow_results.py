@@ -97,8 +97,13 @@ def plot_grow_results(
             grew_path = os.path.join(folder, "metric_grew.npy")
             if os.path.exists(grew_path):
                 grew = np.load(grew_path).astype(float)  # (n_exp, n_iters)
+                with np.errstate(all="ignore"):
+                    mean_grew = np.nanmean(grew, axis=0)
+                all_nan_iters = np.where(np.isnan(mean_grew))[0] + 1
+                if all_nan_iters.size > 0:
+                    print(f"Warning: {name} — no growth data (all NaN) at iterations {all_nan_iters.tolist()}")
                 # iterations (1-indexed) where at least one experiment grew
-                grew_iters = np.where(np.nanmean(grew, axis=0) > 0)[0] + 1
+                grew_iters = np.where(mean_grew > 0)[0] + 1
                 growth_markers.append((grew_iters, color))
 
             grow_idx += 1

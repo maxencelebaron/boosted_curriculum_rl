@@ -64,7 +64,7 @@ def plot_grow_results(
     axsize=(0.17, 0.215, 0.825, 0.7),
     yoffset=0.035,
     ylim=None,
-    legend_loc="best",
+    legend_ncol=2,
 ):
     all_folders = sorted(glob.glob(os.path.join(logs_subdir, "*")))
     all_folders = [f for f in all_folders if os.path.isdir(f)]
@@ -73,7 +73,7 @@ def plot_grow_results(
         print(f"No folders found in {logs_subdir}")
         return
 
-    fig = plt.figure(figsize=(2.56, 1.5))
+    fig = plt.figure(figsize=(3, 2))
     ax = fig.add_axes(axsize)
 
     all_means = []
@@ -128,7 +128,9 @@ def plot_grow_results(
         plt.text(30, ylim[1] + yoffset, r"$\mathcal{T}_2$", fontsize=ticksize)
         plt.text(50, ylim[1] + yoffset, r"$\mathcal{T}_3$", fontsize=ticksize)
 
-    plt.legend(fontsize=ticksize, ncol=2, loc=legend_loc, framealpha=0.75)
+    legend_y = 1.18 if curriculum else 1.04
+    ax.legend(fontsize=ticksize, ncol=legend_ncol, loc="lower center",
+              bbox_to_anchor=(0.5, legend_y), framealpha=0.75)
     plt.xlabel("Iteration", fontsize=fontsize)
     plt.ylabel(ylabel, fontsize=fontsize)
     plt.gca().tick_params(axis="both", which="major", labelsize=ticksize)

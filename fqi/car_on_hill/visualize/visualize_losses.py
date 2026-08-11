@@ -5,7 +5,6 @@ import numpy as np
 plt.rcParams.update({
     "text.usetex": False,
     "font.family": "serif",
-    "font.serif": ["Roman"],
 })
 
 

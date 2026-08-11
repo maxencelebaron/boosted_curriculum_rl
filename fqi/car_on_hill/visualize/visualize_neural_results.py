@@ -6,7 +6,6 @@ from matplotlib.patches import Rectangle
 plt.rcParams.update({
     "text.usetex": False,
     "font.family": "serif",
-    "font.serif": ["Roman"],
 })
 
 
@@ -39,9 +38,8 @@ def visualize_evolution(
     yoffset=0.035,
     suffix="",
     ylim=None,
-    legend_loc="best"
 ):
-    fig = plt.figure(figsize=(2.56, 1.5))
+    fig = plt.figure(figsize=(3, 2))
     ax = fig.add_axes(axsize)
 
     filename = "Q.npy" if residuals else "J.npy"
@@ -83,7 +81,8 @@ def visualize_evolution(
     plt.text(30, ylim[1] + yoffset, r"$\mathcal{T}_2$", fontsize=ticksize)
     plt.text(50, ylim[1] + yoffset, r"$\mathcal{T}_3$", fontsize=ticksize)
 
-    plt.legend(lines, labels, fontsize=ticksize, ncol=2, loc=legend_loc, framealpha=0.75)
+    ax.legend(lines, labels, fontsize=ticksize, ncol=2, loc="lower center",
+              bbox_to_anchor=(0.5, 1.18), framealpha=0.75)
 
     plt.xlabel("Iteration", fontsize=fontsize)
     plt.ylabel(r"$\| Q_t^k - Q_t^* \|_{1, \mu}$" if residuals else "Cum. Disc. Return", fontsize=fontsize)
@@ -107,9 +106,8 @@ def visualize_overestimation(
     yoffset=0.035,
     suffix="",
     ylim=None,
-    legend_loc="best"
 ):
-    fig = plt.figure(figsize=(2.56, 1.5))
+    fig = plt.figure(figsize=(3, 2))
     ax = fig.add_axes(axsize)
 
     filename = "bias_sa.npy" if metric == "sa" else "bias_max.npy"
@@ -151,7 +149,8 @@ def visualize_overestimation(
     plt.text(30, ylim[1] + yoffset, r"$\mathcal{T}_2$", fontsize=ticksize)
     plt.text(50, ylim[1] + yoffset, r"$\mathcal{T}_3$", fontsize=ticksize)
 
-    plt.legend(lines, labels, fontsize=ticksize, ncol=2, loc=legend_loc, framealpha=0.75)
+    ax.legend(lines, labels, fontsize=ticksize, ncol=2, loc="lower center",
+              bbox_to_anchor=(0.5, 1.18), framealpha=0.75)
 
     plt.xlabel("Iteration", fontsize=fontsize)
     if metric == "sa":

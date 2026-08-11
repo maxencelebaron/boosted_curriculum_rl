@@ -1,5 +1,6 @@
 import glob
 import os
+import re
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -7,7 +8,6 @@ import numpy as np
 plt.rcParams.update({
     "text.usetex": False,
     "font.family": "serif",
-    "font.serif": ["Roman"],
 })
 
 
@@ -92,9 +92,20 @@ def visualize_loss_convergence(folder, algo_label, n_tasks, path=None, fontsize=
 def extract_label(folder):
     name = os.path.basename(folder)
     if name.startswith("neural_"):
-        return "NeuralFQI"
+        rest = name[len("neural_"):]
+        boosted = rest.startswith("boosted")
+        after = rest[len("no_boosted_"):] if rest.startswith("no_boosted") else rest[len("boosted_"):]
+        curriculum = after.startswith("curriculum")
+        prefix = ("B" if boosted else "") + ("C" if curriculum else "")
+        return f"{prefix}-NeuralFQI" if prefix else "NeuralFQI"
     if name.startswith("grow_"):
-        return name.replace("grow_", "").split("_no_boosted")[0]
+        rest = re.sub(r'_h\d+_.+$', '', name[len("grow_"):])
+        curriculum = rest.endswith("_curriculum")
+        rest = re.sub(r'_(no_)?curriculum$', '', rest)
+        boosted = rest.endswith("_boosted")
+        growth_mode = re.sub(r'_(no_)?boosted$', '', rest)
+        prefix = ("B" if boosted else "") + ("C" if curriculum else "")
+        return f"{prefix}-{growth_mode}" if prefix else growth_mode
     return name
 
 

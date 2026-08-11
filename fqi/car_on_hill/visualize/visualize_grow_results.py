@@ -1,5 +1,6 @@
 import glob
 import os
+import re
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -8,7 +9,6 @@ from matplotlib.patches import Rectangle
 plt.rcParams.update({
     "text.usetex": False,
     "font.family": "serif",
-    "font.serif": ["Roman"],
 })
 
 BASELINE_COLOR = "C3"
@@ -29,7 +29,13 @@ def plot_lines(ax, data, color, label):
 
 def extract_grow_label(folder):
     name = os.path.basename(folder)
-    return name.replace("grow_", "").split("_no_boosted")[0]
+    rest = re.sub(r'_h\d+_.+$', '', name[len("grow_"):])
+    curriculum = rest.endswith("_curriculum")
+    rest = re.sub(r'_(no_)?curriculum$', '', rest)
+    boosted = rest.endswith("_boosted")
+    growth_mode = re.sub(r'_(no_)?boosted$', '', rest)
+    prefix = ("B" if boosted else "") + ("C" if curriculum else "")
+    return f"{prefix}-{growth_mode}" if prefix else growth_mode
 
 
 def extract_neural_label(folder):

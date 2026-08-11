@@ -77,7 +77,7 @@ def plot_grow_results(
     ax = fig.add_axes(axsize)
 
     all_means = []
-    growth_markers = []  # list of (growth_iters, color)
+    all_growth_iters = set()
     grow_idx = 0
     for folder in all_folders:
         npy_path = os.path.join(folder, filename)
@@ -90,21 +90,14 @@ def plot_grow_results(
             all_means.append(m)
         elif name.startswith("grow_"):
             color = GROW_COLORS[grow_idx % len(GROW_COLORS)]
-            label = extract_grow_label(folder)
-            _, m = plot_lines(ax, data, color, label)
+            _, m = plot_lines(ax, data, color, extract_grow_label(folder))
             all_means.append(m)
 
             grew_path = os.path.join(folder, "metric_grew.npy")
             if os.path.exists(grew_path):
-                grew = np.load(grew_path).astype(float)  # (n_exp, n_iters)
-                with np.errstate(all="ignore"):
-                    mean_grew = np.nanmean(grew, axis=0)
-                all_nan_iters = np.where(np.isnan(mean_grew))[0] + 1
-                if all_nan_iters.size > 0:
-                    print(f"Warning: {name} — no growth data (all NaN) at iterations {all_nan_iters.tolist()}")
-                # iterations (1-indexed) where at least one experiment grew
-                grew_iters = np.where(mean_grew > 0)[0] + 1
-                growth_markers.append((grew_iters, color))
+                grew = np.load(grew_path)  # (n_exp, n_iters), 1.0 where grew else NaN
+                grew_iters = np.where(np.any(grew == 1, axis=0))[0] + 1
+                all_growth_iters.update(grew_iters)
 
             grow_idx += 1
 
@@ -117,9 +110,8 @@ def plot_grow_results(
         else:
             ylim = ax.get_ylim()
 
-    all_growth_iters = sorted({it for grew_iters, _ in growth_markers for it in grew_iters})
     if all_growth_iters:
-        ax.vlines(all_growth_iters, *ylim, color="indigo", linestyle="--", linewidth=0.7, alpha=0.6)
+        ax.vlines(sorted(all_growth_iters), *ylim, color="indigo", linestyle="--", linewidth=0.7, alpha=0.6)
 
     if curriculum:
         plt.vlines(

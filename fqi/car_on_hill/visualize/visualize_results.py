@@ -8,7 +8,6 @@ from matplotlib.patches import Rectangle
 plt.rcParams.update({
     "text.usetex": False,
     "font.family": "serif",
-    "font.serif": ["Roman"],
 })
 
 

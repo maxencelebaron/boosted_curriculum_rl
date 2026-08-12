@@ -3,7 +3,8 @@ Collect datasets with epsilon-greedy policy (epsilon < 1) and analyze them.
 
 Usage (from boosted_curriculum_rl/fqi/car_on_hill/):
     python collect_eps_datasets.py --epsilon 0.1
-    python collect_eps_datasets.py --epsilon 0.3 --n-episodes 1000
+    python collect_eps_datasets.py --epsilon 0.3
+    --n-episodes 1000
 """
 
 import argparse
@@ -54,9 +55,8 @@ def main():
         # Load existing random dataset — needed for the 1 bootstrap fit
         with open('data/dataset_%1.3f.pkl' % m, 'rb') as f:
             dataset_random = pickle.load(f)
-        print(f"  Loaded random dataset ({len(dataset_random)} transitions)")
+        print(f" Loaded random dataset ({len(dataset_random)} transitions)")
 
-        # One FQI fit to make ExtraTrees callable (bootstrap only, not training)
         pi = EpsGreedy(epsilon=Parameter(value=args.epsilon))
         agent = FQI(
             mdp.info, pi,
@@ -70,7 +70,7 @@ def main():
         # Collect with trained policy + epsilon
         core = Core(agent, mdp)
         print(f"  Collecting {args.n_episodes} episodes with epsilon={args.epsilon} ...")
-        dataset_eps = core.evaluate(n_episodes=args.n_episodes, quiet=False)
+        dataset_eps = core.evaluate(n_episodes=args.n_episodes)
         datasets_eps[m] = dataset_eps
 
         pathlib.Path(outdir).mkdir(parents=True, exist_ok=True)

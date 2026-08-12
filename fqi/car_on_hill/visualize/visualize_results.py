@@ -1,4 +1,5 @@
 import os
+import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Rectangle
@@ -9,6 +10,14 @@ plt.rcParams.update({
     "font.family": "serif",
     "font.serif": ["Roman"],
 })
+
+
+def _try_plot(fn, ax, data, color, label):
+    try:
+        return fn(ax, data, color)
+    except Exception as e:
+        warnings.warn(f"Could not plot '{label}': {e}")
+        return None
 
 
 def plot_lines(ax, data, color):
@@ -36,10 +45,14 @@ def visualize_evolution(path=None, residuals=False, fontsize=6, ticksize=6, axsi
     curriculum_data = np.load(os.path.join("logs/no_boosted_curriculum", filename))
     default_data = np.load(os.path.join("logs/no_boosted_no_curriculum", filename))
 
-    l1 = plot_lines(ax, boosted_curriculum_data, "C0")
-    l2 = plot_lines(ax, boosted_data, "C1")
-    l3 = plot_lines(ax, curriculum_data, "C2")
-    l4 = plot_lines(ax, default_data, "C3")
+    all_curves = [
+        (boosted_curriculum_data, "C0", "BC-FQI"),
+        (boosted_data,            "C1", "B-FQI"),
+        (curriculum_data,         "C2", "C-FQI"),
+        (default_data,            "C3", "FQI"),
+    ]
+    handles = [(h, lab) for data, color, lab in all_curves
+               if (h := _try_plot(plot_lines, ax, data, color, lab)) is not None]
 
     ylim = ax.get_ylim()
     plt.vlines([20, 40], *ylim, color="black", linestyle="--", linewidths=[2, 2], alpha=0.5)
@@ -52,7 +65,8 @@ def visualize_evolution(path=None, residuals=False, fontsize=6, ticksize=6, axsi
     plt.text(30, ylim[1] + yoffset, r"$\mathcal{T}_2$", fontsize=ticksize)
     plt.text(50, ylim[1] + yoffset, r"$\mathcal{T}_3$", fontsize=ticksize)
 
-    plt.legend([l1, l2, l3, l4], ["BC-FQI", "B-FQI", "C-FQI", "FQI"], fontsize=ticksize, ncol=2)
+    if handles:
+        plt.legend(*zip(*handles), fontsize=ticksize, ncol=2)
 
     plt.xlabel("Iteration", fontsize=fontsize)
     plt.ylabel(r"$\| Q_t^k - Q_t^* \|_{1, \mu}$" if residuals else "Cum. Disc. Return", fontsize=fontsize)
@@ -99,10 +113,14 @@ def visualize_depths(path=None, fontsize=6, ticksize=6, axsize=(0.17, 0.215, 0.8
     curriculum_data = load_depths("logs/no_boosted_curriculum")
     default_data = load_depths("logs/no_boosted_no_curriculum")
 
-    l1 = plot_lines_with_depth_std(ax, boosted_curriculum_data, "C0")
-    l2 = plot_lines_with_depth_std(ax, boosted_data, "C1")
-    l3 = plot_lines_with_depth_std(ax, curriculum_data, "C2")
-    l4 = plot_lines_with_depth_std(ax, default_data, "C3")
+    all_curves = [
+        (boosted_curriculum_data, "C0", "BC-FQI"),
+        (boosted_data,            "C1", "B-FQI"),
+        (curriculum_data,         "C2", "C-FQI"),
+        (default_data,            "C3", "FQI"),
+    ]
+    handles = [(h, lab) for data, color, lab in all_curves
+               if (h := _try_plot(plot_lines_with_depth_std, ax, data, color, lab)) is not None]
 
     ylim = ax.get_ylim()
     plt.vlines([20, 40], *ylim, color="black", linestyle="--", linewidths=[2, 2], alpha=0.5)
@@ -115,7 +133,8 @@ def visualize_depths(path=None, fontsize=6, ticksize=6, axsize=(0.17, 0.215, 0.8
     plt.text(30, ylim[1] + yoffset, r"$\mathcal{T}_2$", fontsize=ticksize)
     plt.text(50, ylim[1] + yoffset, r"$\mathcal{T}_3$", fontsize=ticksize)
 
-    plt.legend([l1, l2, l3, l4], ["BC-FQI", "B-FQI", "C-FQI", "FQI"], fontsize=ticksize, ncol=2)
+    if handles:
+        plt.legend(*zip(*handles), fontsize=ticksize, ncol=2)
     plt.xlabel("Iteration", fontsize=fontsize)
     plt.ylabel("Mean tree depth", fontsize=fontsize)
     plt.gca().tick_params(axis='both', which='major', labelsize=ticksize)

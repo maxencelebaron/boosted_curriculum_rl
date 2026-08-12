@@ -15,10 +15,10 @@ module load arch/a100
 export PYTHONPATH=$PYTHONPATH:$PWD/../..
 
 declare -a ARGS=(
-    "--use-curriculum --use-boosting --use-neural"
-    "--use-boosting --use-neural"
-    "--use-curriculum --use-neural"
-    "--use-neural"
+    "--use-curriculum --use-boosting --use-neural --data-dir data_eps0p10"
+    "--use-boosting --use-neural --data-dir data_eps0p10"
+    "--use-curriculum --use-neural --data-dir data_eps0p10"
+    "--use-neural --data-dir data_eps0p10"
 )
 
 python run.py --n-exp 5 --monitor-loss ${ARGS[$SLURM_ARRAY_TASK_ID]}

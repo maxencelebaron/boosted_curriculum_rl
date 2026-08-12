@@ -21,7 +21,7 @@ from mushroom_rl.utils.dataset import compute_J
 from mushroom_rl.utils.parameters import Parameter
 
 
-def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
+def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False, data_dir="data"):
     seed = 95 + exp_id
     np.random.seed(seed)
     print("Running with seed %d" % seed)
@@ -151,14 +151,13 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
 
         # Dataset collection
         try:
-            with open('data/dataset_%1.3f.pkl' % mdp._m, 'rb') as f:
+            with open('%s/dataset_%1.3f.pkl' % (data_dir, mdp._m), 'rb') as f:
                 dataset = pickle.load(f)
         except FileNotFoundError:
             agent.policy.set_epsilon(epsilon)
             logger.info('Generating dataset for task %d...' % i)
             dataset = core.evaluate(n_episodes=1000)
-            # pathlib.Path('data_2').mkdir(parents=True, exist_ok=True)
-            with open('data/dataset_%1.3f.pkl' % mdp._m, 'wb') as f:
+            with open('%s/dataset_%1.3f.pkl' % (data_dir, mdp._m), 'wb') as f:
                 pickle.dump(dataset, f)
 
         j_task = list()
@@ -221,6 +220,7 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument("--data-dir", type=str, default="data")
     parser.add_argument("--use-curriculum", action='store_true')
     parser.add_argument("--use-boosting", action='store_true')
     parser.add_argument(
@@ -253,7 +253,8 @@ if __name__ == '__main__':
             args.use_boosting,
             args.use_neural,
             iters_per_env,
-            args.monitor_loss
+            args.monitor_loss,
+            args.data_dir,
         )
         for exp_id in range(args.n_exp))
     Js = [o[0] for o in out]

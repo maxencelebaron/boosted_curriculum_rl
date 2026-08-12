@@ -26,6 +26,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--epsilon",    type=float, default=0.1)
     parser.add_argument("--n-episodes", type=int,   default=1000)
+    parser.add_argument("--n-fqi-iters", type=int,  default=20)
     parser.add_argument("--seed",       type=int,   default=10)
     args = parser.parse_args()
 
@@ -46,42 +47,57 @@ def main():
     eps_tag = f"eps{args.epsilon:.2f}".replace('.', 'p')
     outdir = f"data_{eps_tag}"
 
-    datasets_eps = {}
-    for m in ms:
-        print(f"\n{'='*50}\nm = {m:.3f}")
+    pathlib.Path(outdir).mkdir(parents=True, exist_ok=True)
+
+    datasets_collected = {}
+    prev_agent = None
+
+    for i, m in enumerate(ms):
+        print(f"\n{'='*50}\nTask {i}  m = {m:.3f}")
         mdp = CarOnHill()
         mdp._m = m
 
-        # Load existing random dataset — needed for the 1 bootstrap fit
-        with open('data/dataset_%1.3f.pkl' % m, 'rb') as f:
-            dataset_random = pickle.load(f)
-        print(f" Loaded random dataset ({len(dataset_random)} transitions)")
+        if i == 0:
+            # No prior policy - collect with random policy
+            pi_rand = EpsGreedy(epsilon=Parameter(value=args.epsilon))
+            rand_agent = FQI(
+                mdp.info, pi_rand,
+                FastExtraTreesActionRegressor,
+                n_iterations=1,
+                approximator_params=approximator_params,
+                quiet=True,
+            )
+            print(f" Collecting {args.n_episodes} episodes with random policy ...")
+            dataset = Core(rand_agent, mdp).evaluate(n_episodes=args.n_episodes)
+        else:
+            # Collect with the policy learned on the previous task
+            print(f"  Collecting {args.n_episodes} episodes with epsilon={args.epsilon} ...")
+            dataset = Core(prev_agent, mdp).evaluate(n_episodes=args.n_episodes)
 
-        pi = EpsGreedy(epsilon=Parameter(value=args.epsilon))
-        agent = FQI(
-            mdp.info, pi,
-            FastExtraTreesActionRegressor,
-            n_iterations=20,
-            approximator_params=approximator_params,
-            quiet=True,
-        )
-        agent.fit(dataset_random)
-
-        # Collect with trained policy + epsilon
-        core = Core(agent, mdp)
-        print(f"  Collecting {args.n_episodes} episodes with epsilon={args.epsilon} ...")
-        dataset_eps = core.evaluate(n_episodes=args.n_episodes)
-        datasets_eps[m] = dataset_eps
-
-        pathlib.Path(outdir).mkdir(parents=True, exist_ok=True)
         with open(f"{outdir}/dataset_{m:.3f}.pkl", 'wb') as f:
-            pickle.dump(dataset_eps, f)
-        print(f"  Saved {len(dataset_eps)} transitions -> {outdir}/dataset_{m:.3f}.pkl")
+            pickle.dump(dataset, f)
+        print(f"  Saved {len(dataset)} transitions -> {outdir}/dataset_{m:.3f}.pkl")
+        datasets_collected[m] = dataset
+
+        if i < len(ms) - 1:
+            # Train FQI - policy for the next task (inutile pour la dernière tâche)
+            pi = EpsGreedy(epsilon=Parameter(value=args.epsilon))
+            prev_agent = FQI(
+                mdp.info,
+                pi,
+                FastExtraTreesActionRegressor,
+                n_iterations=1,
+                approximator_params=approximator_params,
+                quiet=True,
+            )
+            print(f"  Training FQI ({args.n_fqi_iters} iters) on m={m:.3f} ...")
+            for _ in range(args.n_fqi_iters):
+                prev_agent.fit(dataset)
 
     run_analysis(
-        datasets_eps,
+        datasets_collected,
         outdir=outdir,
-        title=f"Car-on-Hill datasets (20-iter FQI + epsilon={args.epsilon})",
+        title=f"Car-on-Hill datasets (curriculum collection, epsilon={args.epsilon})",
     )
 
 

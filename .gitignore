@@ -136,3 +136,5 @@ logs
 figures
 data
 slurm/
+
+**/*data*/

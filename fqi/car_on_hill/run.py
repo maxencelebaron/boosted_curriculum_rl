@@ -96,9 +96,9 @@ def experiment(exp_id, ms, boosted, neural, iters_per_env, monitor_loss=False, d
             prediction='sum',
         )
         fit_params = dict(
-            lr=2e-3,
-            n_epochs=70,
-            batch_size=50,
+            lr=4e-3,
+            n_epochs=3,
+            batch_size=128,
             reinit=False,
         )
     else:

@@ -11,10 +11,10 @@
 export PYTHONPATH=$PYTHONPATH:$PWD/../..
 
 declare -a ARGS=(
-    "--use-curriculum --use-boosting --data-dir data_online"
-    "--use-boosting --data-dir data_online"
-    "--use-curriculum --data-dir data_online"
-    "--data-dir data_online"
+    "--use-curriculum --use-boosting --data-dir data_online/curriculum_boosted"
+    "--use-boosting --data-dir data_online/boosted"
+    "--use-curriculum --data-dir data_online/curriculum"
+    "--data-dir data_online/none"
 )
 
 python run_online.py --n-exp 5 --n-jobs 1 ${ARGS[$SLURM_ARRAY_TASK_ID]}

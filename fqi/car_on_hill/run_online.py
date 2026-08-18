@@ -167,6 +167,7 @@ def experiment(
                 agent.policy.set_epsilon(Parameter(value=collect_epsilon))
                 logger.info('Generating dataset for task %d with trained policy...' % i)
             dataset = Core(agent, mdp).evaluate(n_episodes=n_episodes_collect)
+            pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
             with open('%s/dataset_%1.3f.pkl' % (data_dir, mdp._m), 'wb') as f:
                 pickle.dump(dataset, f)
 

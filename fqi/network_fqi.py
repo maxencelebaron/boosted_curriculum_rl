@@ -18,11 +18,11 @@ class Q_Network(nn.Module):
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(2, 64),
+            nn.Linear(2, 256),
             nn.ReLU(),
-            nn.Linear(64, 64),
+            nn.Linear(256, 256),
             nn.ReLU(),
-            nn.Linear(64, 2),
+            nn.Linear(256, 2),
         )
 
     def forward(self, state):

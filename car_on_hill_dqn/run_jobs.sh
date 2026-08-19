@@ -13,4 +13,4 @@ module load arch/a100
 
 export PYTHONPATH=$PYTHONPATH:$PWD/..
 
-python train_dqn_linear.py --n-jobs 1 --n-exp 5
+python train_dqn_linear.py --n-jobs 4 --n-exp 5

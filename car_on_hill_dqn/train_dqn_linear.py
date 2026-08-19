@@ -1,12 +1,13 @@
 from joblib import Parallel, delayed
+from dataclasses import dataclass
 
 import os
 import torch
 import pathlib
-import argparse
 import numpy as np
 import torch.optim as optim
 import torch.nn.functional as F
+import tyro
 from mushroom_rl.core import Core
 from mushroom_rl.policy import EpsGreedy
 from mushroom_rl.utils.dataset import compute_J
@@ -20,20 +21,38 @@ from fqi.car_on_hill.solver import solve_car_on_hill
 
 torch.set_num_threads(1)
 
-N_TIMESTEPS = 120000
-N_EVAL_POINTS = 20
-TRAIN_FREQ = 16
-GRADIENT_STEPS = 8
-EXPLORATION_FRACTION = 0.2
-EXPLORATION_FINAL_EPS = 0.07
-LEARNING_RATE = 4e-3
-BATCH_SIZE = 128
-BUFFER_SIZE = 10000
-LEARNING_STARTS = 1000
-TARGET_UPDATE_INTERVAL = 600
+
+@dataclass
+class Args:
+    n_jobs: int = 4
+    """number of parallel jobs"""
+    n_exp: int = 4
+    """number of experiments (seeds)"""
+    n_timesteps: int = 120000
+    """total environment steps per experiment"""
+    n_eval_points: int = 60
+    """number of evaluation checkpoints"""
+    train_freq: int = 16
+    """number of env steps between gradient updates"""
+    gradient_steps: int = 8
+    """number of gradient updates per training call"""
+    exploration_fraction: float = 0.2
+    """fraction of n_timesteps over which epsilon is annealed"""
+    exploration_final_eps: float = 0.07
+    """final value of epsilon"""
+    learning_rate: float = 4e-3
+    """learning rate of the Adam optimizer"""
+    batch_size: int = 128
+    """batch size sampled from the replay buffer"""
+    buffer_size: int = 10000
+    """maximum replay buffer size"""
+    learning_starts: int = 1000
+    """number of steps before learning starts"""
+    target_update_interval: int = 600
+    """number of gradient steps between target network updates"""
 
 
-def train_dqn(seed, log_dir):
+def train_dqn(seed, log_dir, args):
     np.random.seed(seed)
     mdp = CarOnHill()
 
@@ -63,7 +82,7 @@ def train_dqn(seed, log_dir):
         test_q = np.array(solve_car_on_hill(mdp, test_states, test_actions, mdp.info.gamma))
         np.save(q_path, test_q)
 
-    optimizer = {'class': optim.Adam, 'params': dict(lr=LEARNING_RATE)}
+    optimizer = {'class': optim.Adam, 'params': dict(lr=args.learning_rate)}
 
     approximator_params = dict(
         network=Network,
@@ -76,32 +95,35 @@ def train_dqn(seed, log_dir):
     )
 
     algorithm_params = dict(
-        batch_size=BATCH_SIZE,
-        target_update_frequency=TARGET_UPDATE_INTERVAL,
-        initial_replay_size=LEARNING_STARTS,
-        max_replay_size=BUFFER_SIZE,
+        batch_size=args.batch_size,
+        target_update_frequency=args.target_update_interval,
+        initial_replay_size=args.learning_starts,
+        max_replay_size=args.buffer_size,
     )
 
-    n_steps_per_fit = TRAIN_FREQ
-    steps_per_eval = N_TIMESTEPS // N_EVAL_POINTS
-    n_explore = int(N_TIMESTEPS * EXPLORATION_FRACTION)
+    steps_per_eval = args.n_timesteps // args.n_eval_points
+    n_explore = int(args.n_timesteps * args.exploration_fraction)
 
-    epsilon = LinearParameter(value=1.0, threshold_value=EXPLORATION_FINAL_EPS, n=n_explore)
+    epsilon = LinearParameter(value=1.0, threshold_value=args.exploration_final_eps, n=n_explore)
     test_epsilon = Parameter(value=0.)
     pi = EpsGreedy(epsilon)
 
-    agent = CarOnHillDQN(mdp.info, pi, TorchApproximator,
-                         gradient_steps=GRADIENT_STEPS,
-                         approximator_params=approximator_params,
-                         **algorithm_params)
+    agent = CarOnHillDQN(
+        mdp.info,
+        pi,
+        TorchApproximator,
+        gradient_steps=args.gradient_steps,
+        approximator_params=approximator_params,
+        **algorithm_params
+    )
     core = Core(agent, mdp)
 
     js, diff_qs, bias_sas, bias_maxs = [], [], [], []
     n_states = len(test_states) // 2
 
-    for _ in range(N_EVAL_POINTS):
+    for _ in range(args.n_eval_points):
         pi.set_epsilon(epsilon)
-        core.learn(n_steps=steps_per_eval, n_steps_per_fit=n_steps_per_fit)
+        core.learn(n_steps=steps_per_eval, n_steps_per_fit=args.train_freq)
 
         pi.set_epsilon(test_epsilon)
         test_dataset = core.evaluate(initial_states=test_states, quiet=True)
@@ -123,21 +145,18 @@ def train_dqn(seed, log_dir):
     return js, diff_qs, bias_sas, bias_maxs
 
 
-def experiment(seed, log_dir):
-    return train_dqn(seed, log_dir)
+def experiment(seed, log_dir, args):
+    return train_dqn(seed, log_dir, args)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--n-jobs", type=int, default=10)
-    parser.add_argument("--n-exp", type=int, default=20)
-    args = parser.parse_args()
+    args = tyro.cli(Args)
 
     log_dir = "logs/dqn_car_on_hill"
     os.makedirs(log_dir, exist_ok=True)
 
     out = Parallel(n_jobs=args.n_jobs)(
-        delayed(experiment)(k, log_dir) for k in range(args.n_exp))
+        delayed(experiment)(k, log_dir, args) for k in range(args.n_exp))
 
     Js      = np.array([o[0] for o in out])
     Qs      = np.array([o[1] for o in out])

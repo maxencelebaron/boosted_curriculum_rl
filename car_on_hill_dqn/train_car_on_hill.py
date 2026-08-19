@@ -1,13 +1,14 @@
 from joblib import Parallel, delayed
+from dataclasses import dataclass, field
 
 import os
 import yaml
 import torch
 import pathlib
-import argparse
 import numpy as np
 import torch.optim as optim
 import torch.nn.functional as F
+import tyro
 from tqdm import trange
 from mushroom_rl.core import Core
 from mushroom_rl.policy import EpsGreedy
@@ -22,24 +23,52 @@ from fqi.car_on_hill.solver import solve_car_on_hill
 
 torch.set_num_threads(1)
 
-N_TIMESTEPS = 120000
-N_EVAL_POINTS = 20
-TRAIN_FREQ = 16
-GRADIENT_STEPS = 8
-EXPLORATION_FRACTION = 0.2
-EXPLORATION_FINAL_EPS = 0.07
-LEARNING_RATE = 4e-3
-BATCH_SIZE = 128
-BUFFER_SIZE = 10000
-LEARNING_STARTS = 1000
-TARGET_UPDATE_INTERVAL = 600
+
+@dataclass
+class Args:
+    use_curriculum: bool = False
+    """if set, train on ms=[0.8, 1.0, 1.2] with curriculum_timesteps per task"""
+    use_boosting: bool = False
+    """if set, use BoostedCarOnHillDQN"""
+    n_jobs: int = 4
+    """number of parallel jobs"""
+    n_exp: int = 5
+    """number of experiments (seeds)"""
+    n_eval_points: int = 20
+    """number of evaluation checkpoints per task"""
+    curriculum_timesteps: tuple[int, int, int] = (30_000, 40_000, 50_000)
+    """timesteps per task when use_curriculum=True"""
+    transition_steps: int = 1000
+    """steps with fixed low epsilon to fill buffer when switching tasks (curriculum only)"""
+    transition_eps: float = 0.05
+    """starting epsilon for tasks i>0"""
+    n_timesteps: int = 120000
+    """timesteps for the single task when use_curriculum=False"""
+    train_freq: int = 16
+    """number of env steps between gradient updates"""
+    gradient_steps: int = 8
+    """number of gradient updates per training call"""
+    exploration_fraction: float = 0.2
+    """fraction of task timesteps over which epsilon is annealed"""
+    exploration_final_eps: float = 0.07
+    """final value of epsilon"""
+    learning_rate: float = 4e-3
+    """learning rate of the Adam optimizer"""
+    batch_size: int = 128
+    """batch size sampled from the replay buffer"""
+    buffer_size: int = 10000
+    """maximum replay buffer size"""
+    learning_starts: int = 1000
+    """number of steps before learning starts"""
+    target_update_interval: int = 600
+    """number of gradient steps between target network updates"""
 
 
-def experiment(exp_id, ms, use_boosting, n_eval_points=N_EVAL_POINTS):
+def experiment(exp_id, ms, timesteps_per_task, args):
     seed = exp_id
     np.random.seed(seed)
 
-    alg = BoostedCarOnHillDQN if use_boosting else CarOnHillDQN
+    alg = BoostedCarOnHillDQN if args.use_boosting else CarOnHillDQN
     n_tasks = len(ms)
 
     mdps = [CarOnHill() for _ in range(n_tasks)]
@@ -76,7 +105,7 @@ def experiment(exp_id, ms, use_boosting, n_eval_points=N_EVAL_POINTS):
             test_q.append(q_vals)
     test_q = np.array(test_q)
 
-    optimizer = {'class': optim.Adam, 'params': dict(lr=LEARNING_RATE)}
+    optimizer = {'class': optim.Adam, 'params': dict(lr=args.learning_rate)}
     approximator_params = dict(
         network=Network,
         input_shape=mdps[0].info.observation_space.shape,
@@ -85,44 +114,58 @@ def experiment(exp_id, ms, use_boosting, n_eval_points=N_EVAL_POINTS):
         loss=F.mse_loss,
         optimizer=optimizer,
         use_cuda=True,
+        prediction='sum',
     )
-    if use_boosting:
+    if args.use_boosting:
         approximator_params['n_models'] = n_tasks
 
     algorithm_params = dict(
-        batch_size=BATCH_SIZE,
-        target_update_frequency=TARGET_UPDATE_INTERVAL,
-        initial_replay_size=LEARNING_STARTS,
-        max_replay_size=BUFFER_SIZE,
+        batch_size=args.batch_size,
+        target_update_frequency=args.target_update_interval,
+        initial_replay_size=args.learning_starts,
+        max_replay_size=args.buffer_size,
     )
 
     test_epsilon = Parameter(value=0.)
     pi = EpsGreedy(epsilon=Parameter(value=1.))
 
-    agent = alg(mdps[0].info, pi, TorchApproximator,
-                gradient_steps=GRADIENT_STEPS,
-                approximator_params=approximator_params,
-                **algorithm_params)
+    agent = alg(
+        mdps[0].info,
+        pi,
+        TorchApproximator,
+        gradient_steps=args.gradient_steps,
+        approximator_params=approximator_params,
+        **algorithm_params
+    )
 
-    steps_per_eval = N_TIMESTEPS // n_eval_points
-    n_explore = int(N_TIMESTEPS * EXPLORATION_FRACTION)
     n_states = len(test_states) // 2
-
     js, diff_qs, bias_sas, bias_maxs = [], [], [], []
 
-    for i, mdp in enumerate(mdps):
-        if use_boosting:
-            agent.set_curriculum_idx_and_reset(i)
-
-        epsilon = LinearParameter(value=1.0, threshold_value=EXPLORATION_FINAL_EPS, n=n_explore)
+    for i, (mdp, n_timesteps_task) in enumerate(zip(mdps, timesteps_per_task)):
         core = Core(agent, mdp)
-        predict_kwargs = dict(idx=np.arange(i + 1)) if use_boosting else {}
+
+        if args.use_boosting:
+            agent.set_curriculum_idx_and_reset(i)
+        elif i > 0:
+            agent._replay_memory.reset()
+            # fill buffer with learned policy before resuming training
+            pi.set_epsilon(Parameter(value=args.transition_eps))
+            core.learn(n_steps=args.transition_steps, n_steps_per_fit=args.train_freq)
+
+        steps_per_eval = n_timesteps_task // args.n_eval_points
+        if i == 0:
+            n_explore = int(n_timesteps_task * args.exploration_fraction)
+            epsilon = LinearParameter(value=1.0, threshold_value=args.exploration_final_eps, n=n_explore)
+        else:
+            epsilon = Parameter(value=0.)
+
+        predict_kwargs = dict(idx=np.arange(i + 1)) if args.use_boosting else {}
 
         j_task, diff_q_task, bias_sa_task, bias_max_task = [], [], [], []
 
-        for _ in trange(n_eval_points, dynamic_ncols=True, leave=False):
+        for _ in trange(args.n_eval_points, dynamic_ncols=True, leave=False):
             pi.set_epsilon(epsilon)
-            core.learn(n_steps=steps_per_eval, n_steps_per_fit=TRAIN_FREQ)
+            core.learn(n_steps=steps_per_eval, n_steps_per_fit=args.train_freq)
 
             pi.set_epsilon(test_epsilon)
             test_dataset = core.evaluate(initial_states=test_states, quiet=True)
@@ -144,19 +187,14 @@ def experiment(exp_id, ms, use_boosting, n_eval_points=N_EVAL_POINTS):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--use-curriculum", action='store_true')
-    parser.add_argument("--use-boosting", action='store_true')
-    parser.add_argument("--n-exp", type=int, default=20)
-    parser.add_argument("--n-jobs", type=int, default=10)
-    args = parser.parse_args()
+    args = tyro.cli(Args)
 
     if args.use_curriculum:
         ms = [.8, 1., 1.2]
+        timesteps_per_task = list(args.curriculum_timesteps)
     else:
-        ms = [1.2, 1.2, 1.2] if args.use_boosting else [1.2]
-
-    n_eval_points = N_EVAL_POINTS
+        ms = [1.2]
+        timesteps_per_task = [args.n_timesteps]
 
     boost = 'boosted' if args.use_boosting else 'no_boosted'
     cur = 'curriculum' if args.use_curriculum else 'no_curriculum'
@@ -164,7 +202,7 @@ if __name__ == '__main__':
     os.makedirs(log_dir, exist_ok=True)
 
     out = Parallel(n_jobs=args.n_jobs)(
-        delayed(experiment)(k, ms, args.use_boosting, n_eval_points)
+        delayed(experiment)(k, ms, timesteps_per_task, args)
         for k in range(args.n_exp))
 
     Js = np.array([o[0] for o in out])
@@ -181,21 +219,21 @@ if __name__ == '__main__':
         'algorithm': 'DQN',
         'use_curriculum': args.use_curriculum,
         'use_boosting': args.use_boosting,
+        'ms': ms,
+        'timesteps_per_task': timesteps_per_task,
+        'n_eval_points': args.n_eval_points,
         'n_exp': args.n_exp,
         'n_jobs': args.n_jobs,
-        'ms': ms,
-        'n_eval_points': n_eval_points,
         'dqn_params': {
-            'n_timesteps': N_TIMESTEPS,
-            'learning_rate': LEARNING_RATE,
-            'batch_size': BATCH_SIZE,
-            'buffer_size': BUFFER_SIZE,
-            'learning_starts': LEARNING_STARTS,
-            'target_update_interval': TARGET_UPDATE_INTERVAL,
-            'train_freq': TRAIN_FREQ,
-            'gradient_steps': GRADIENT_STEPS,
-            'exploration_fraction': EXPLORATION_FRACTION,
-            'exploration_final_eps': EXPLORATION_FINAL_EPS,
+            'train_freq': args.train_freq,
+            'gradient_steps': args.gradient_steps,
+            'exploration_fraction': args.exploration_fraction,
+            'exploration_final_eps': args.exploration_final_eps,
+            'learning_rate': args.learning_rate,
+            'batch_size': args.batch_size,
+            'buffer_size': args.buffer_size,
+            'learning_starts': args.learning_starts,
+            'target_update_interval': args.target_update_interval,
         },
     }
     with open(os.path.join(log_dir, 'config.yaml'), 'w') as f:

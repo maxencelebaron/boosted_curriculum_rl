@@ -5,7 +5,7 @@ from mushroom_rl.approximators.parametric.torch_approximator import *
 
 class CarOnHillDQN(DQN):
 
-    def __init__(self, gradient_steps=1, *args, **kwargs):
+    def __init__(self, *args, gradient_steps=1, **kwargs):
         self._gradient_steps = gradient_steps
         super().__init__(*args, **kwargs)
 
@@ -27,7 +27,7 @@ class CarOnHillDQN(DQN):
 
 class BoostedCarOnHillDQN(DQN):
 
-    def __init__(self, gradient_steps=1, *args, **kwargs):
+    def __init__(self, *args, gradient_steps=1, **kwargs):
         self._gradient_steps = gradient_steps
         self._curriculum_idx = 0
         super().__init__(*args, **kwargs)
@@ -68,7 +68,7 @@ class BoostedCarOnHillDQN(DQN):
 
 class SingleBoostedDQN(DQN):
 
-    def __init__(self, prev_q, gradient_steps=1, *args, **kwargs):
+    def __init__(self, *args, prev_q, gradient_steps=1, **kwargs):
         self.prev_q = prev_q
         self._gradient_steps = gradient_steps
 

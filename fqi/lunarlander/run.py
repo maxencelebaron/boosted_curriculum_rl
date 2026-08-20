@@ -11,7 +11,7 @@ from tqdm import trange
 
 from fqi.fast_extra_tress import FastExtraTreesActionRegressor
 from fqi.fqi import BoostedFQI
-from fqi.network_fqi import NeuralRegressor
+from fqi.network_fqi_lunarlander import NeuralRegressor
 from fqi.neural_fqi import BoostedNeuralFQI, NeuralFQI
 from mushroom_rl.algorithms.value import FQI
 from mushroom_rl.core import Core, Logger
@@ -79,7 +79,7 @@ def experiment(
             n_models=n_tasks if boosted else 1,
             prediction="sum",
         )
-        fit_params = dict(lr=5e-4, n_epochs=3, batch_size=64, reinit=False)
+        fit_params = dict(lr=5e-4, n_epochs=20, batch_size=64, reinit=False)
     else:
         approximator_cls = FastExtraTreesActionRegressor
         approximator_params = dict(

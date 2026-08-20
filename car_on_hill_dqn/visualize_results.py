@@ -69,7 +69,9 @@ def _add_task_patches(ax, ylim, n_eval_per_task, n_tasks, yoffset, ticksize):
 def _plot_metric(filename, ylabel, path, fontsize, ticksize, axsize, yoffset,
                  n_eval_per_task, n_tasks, ylim=None):
     log_dir = "logs/dqn_car_on_hill"
-    data = _safe_load(os.path.join(log_dir, filename)) or _load_per_seed(log_dir, filename)
+    data = _safe_load(os.path.join(log_dir, filename))
+    if data is None:
+        data = _load_per_seed(log_dir, filename)
     datasets = [(data, "C0", "DQN")]
 
     fig = plt.figure(figsize=(3, 2))

@@ -61,6 +61,9 @@ def experiment(
         )
         for wind_power in wind_powers
     ]
+    for i, mdp in enumerate(mdps):
+        mdp.seed(seed + i)
+
     n_tasks = len(mdps)
 
     test_epsilon = Parameter(value=0.0)

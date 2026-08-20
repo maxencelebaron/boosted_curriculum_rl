@@ -6,4 +6,5 @@ matplotlib
 pynput
 tyro==1.0.15
 PyYAML
+gymnasium[box2d]
 -e ../gromo

@@ -86,7 +86,7 @@ def experiment(
             input_shape=mdps[0].info.observation_space.shape,
             n_actions=mdps[0].info.action_space.n,
             n_models=n_tasks if boosted else 1,
-            n_estimators=50,
+            n_estimators=10,
             min_samples_split=5,
             min_samples_leaf=2,
             random_state=seed,

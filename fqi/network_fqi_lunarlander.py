@@ -31,6 +31,29 @@ class Q_Network(nn.Module):
         return self.net(state)
 
 
+class DQNNetwork(nn.Module):
+    """LunarLander network compatible with MushroomRL TorchApproximator."""
+
+    def __init__(self, input_shape, output_shape, **kwargs):
+        del kwargs
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_shape[0], 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Linear(32, output_shape[0]),
+        )
+
+    def forward(self, state, action=None):
+        q = self.net(state.float())
+        if action is not None:
+            q = q.gather(1, action.long()).squeeze(1)
+        return q
+
+
 class NeuralRegressor():
     """
     Wrapper around Q_Network that exposes the fit/predict interface expected

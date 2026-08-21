@@ -6,7 +6,6 @@
 #SBATCH --time=20:00:00
 #SBATCH --output=slurm/logs/%x_%A_%a.out
 #SBATCH --error=slurm/logs/%x_%A_%a.err
-#SBATCH --array=0-3
 #SBATCH -A inl@a100
 
 module purge
@@ -14,11 +13,11 @@ module load arch/a100
 
 export PYTHONPATH=$PYTHONPATH:$PWD/../..
 
-declare -a ARGS=(
-    "--use-curriculum --use-boosting --use-neural --data-dir data/curriculum_boosted"
-    "--use-boosting --use-neural --data-dir data/boosted"
-    "--use-curriculum --use-neural --data-dir data/curriculum"
-    "--use-neural --data-dir data/none"
-)
 
-python run.py --n-exp 5 --monitor-loss ${ARGS[$SLURM_ARRAY_TASK_ID]}
+python run_dqn.py \
+  --n-exp 1 \
+  --n-jobs 1 \
+  --n-timesteps 5000 \
+  --n-eval-points 5 \
+  --n-test-episodes 2 \
+  --no-use-cudass ${ARGS[$SLURM_ARRAY_TASK_ID]}

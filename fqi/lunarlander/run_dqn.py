@@ -28,7 +28,7 @@ torch.set_num_threads(1)
 class Args:
     n_jobs: int = 1
     """Number of parallel jobs."""
-    n_exp: int = 5
+    n_exp: int = 3
     """Number of experiments (seeds)."""
     n_timesteps: int = 1_500_000
     """Total environment steps per experiment."""

@@ -22,6 +22,17 @@ from mushroom_rl.utils.parameters import Parameter
 from fqi.lunarlander.env import LunarLander
 
 
+def to_builtin(value):
+    """Convert NumPy values recursively to YAML-safe Python values."""
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {key: to_builtin(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [to_builtin(item) for item in value]
+    return value
+
+
 def experiment(
     exp_id,
     wind_powers,
@@ -240,7 +251,10 @@ if __name__ == "__main__":
         model_architecture=out[0][5],
     )
     with (output_dir / "config.yaml").open("w") as stream:
-        yaml.dump(config, stream, default_flow_style=False, sort_keys=False)
+        yaml.safe_dump(
+            to_builtin(config), stream, default_flow_style=False,
+            sort_keys=False,
+        )
     np.save(output_dir / "J.npy", np.asarray(returns))
     if not args.use_neural:
         np.save(output_dir / "depths.npy", np.asarray(depths))

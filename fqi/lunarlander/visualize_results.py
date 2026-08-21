@@ -8,7 +8,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import yaml
 
 
 CONFIGURATIONS = (
@@ -28,8 +27,6 @@ def load_results(logs_dir):
         try:
             returns = np.load(folder / "J.npy")
             depths = np.load(folder / "depths.npy")
-            with (folder / "config.yaml").open("r") as stream:
-                config = yaml.safe_load(stream)
         except FileNotFoundError as error:
             warnings.warn(f"Skipping {label}: {error}")
             continue
@@ -49,7 +46,6 @@ def load_results(logs_dir):
             "color": color,
             "returns": returns,
             "depths": depths,
-            "config": config,
         })
 
     if not results:

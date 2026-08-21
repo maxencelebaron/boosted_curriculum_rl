@@ -15,6 +15,7 @@ from gromo.utils.training_utils import (
     DummyMetric,
     enumerate_dataloader
 )
+from .natural_gradient import natural_gradient_step
 
 
 def feature_rank(features: np.ndarray, epsilon: float = 0.01):
@@ -207,16 +208,30 @@ def pre_growth_optimize(
     td_targets: torch.Tensor,
     optimizer,
     n_steps: int,
+    use_natural_gradient: bool = False,
+    natural_gradient_damping: float = 1e-4,
 ) -> tuple[float, float, list[float]]:
     """
-    Run n_steps of Bellman backprop on a fixed batch before deciding whether to grow.
+    Optimize the Bellman loss on a fixed batch before deciding whether to grow.
 
     Optimizes L = (1/n)||T^π Q - Φ(W)·θ^T||² jointly over all network weights.
+
+    By default, regular backpropagation through ``optimizer`` is used.  When
+    ``use_natural_gradient`` is true, each step applies the empirical natural
+    gradient ``J^dagger (td_targets - Q)``.  The learning rate is read from the
+    optimizer's first parameter group and ``natural_gradient_damping`` controls
+    Tikhonov damping of the empirical Fisher.
 
     Returns (initial_loss, final_loss, loss_history). The network and optimizer
     are updated in place, so W* and θ* are retained for the subsequent growth step.
     """
-    _actions = actions.unsqueeze(1)
+    if n_steps < 1:
+        raise ValueError("n_steps must be at least 1.")
+    if use_natural_gradient and not optimizer.param_groups:
+        raise ValueError("The optimizer must contain a parameter group.")
+
+    _actions = actions.reshape(-1, 1)
+    parameters = [parameter for parameter in network.parameters() if parameter.requires_grad]
     loss_history = []
     loss = None
     for _ in range(n_steps):
@@ -225,8 +240,17 @@ def pre_growth_optimize(
         loss = F.mse_loss(td_targets, old_val)
         loss_history.append(loss.item())
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        if use_natural_gradient:
+            natural_gradient_step(
+                predictions=old_val,
+                targets=td_targets,
+                parameters=parameters,
+                step_size=optimizer.param_groups[0]["lr"],
+                damping=natural_gradient_damping,
+            )
+        else:
+            loss.backward()
+            optimizer.step()
 
     return loss_history[0], loss.item(), loss_history
 

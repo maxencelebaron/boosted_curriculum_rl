@@ -1,3 +1,5 @@
+"Tiny (Natural gradient Only on the last parameter"
+
 import copy
 import numpy as np
 import torch

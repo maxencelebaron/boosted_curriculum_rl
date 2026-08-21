@@ -1,3 +1,5 @@
+"Natural Gradient or Backpropagation or anything & random and random - 0 initialization"
+
 import copy
 import numpy as np
 import torch

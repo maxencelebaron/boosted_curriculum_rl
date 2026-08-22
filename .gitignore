@@ -138,3 +138,5 @@ data
 slurm/
 
 **/*data*/
+**/*KFAC_from_scratch.pdf
+**/*natural_gradient_kfac_tiny_english_correct_notation.pdf

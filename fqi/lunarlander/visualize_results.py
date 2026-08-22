@@ -2,11 +2,13 @@
 
 import argparse
 import pathlib
+import re
 import warnings
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 
 
@@ -160,9 +162,172 @@ def visualize_depths(results, output_path):
     plt.close(figure)
 
 
+def find_metric_file(log_dir, metric, seed):
+    """Support both metric_name-95.npy and metric-name-95.npy."""
+    candidates = (
+        log_dir / f"{metric}-{seed}.npy",
+        log_dir / f"{metric.replace('_', '-')}-{seed}.npy",
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def discover_dqn_seeds(log_dir):
+    seeds = []
+    for path in log_dir.glob("J-*.npy"):
+        match = re.fullmatch(r"J-(\d+)\.npy", path.name)
+        if match is not None:
+            seeds.append(int(match.group(1)))
+    if not seeds:
+        raise FileNotFoundError(f"No J-<seed>.npy found in {log_dir}")
+    return sorted(set(seeds))
+
+
+def load_dqn_metric(log_dir, seeds, metric):
+    data = []
+    for seed in seeds:
+        path = find_metric_file(log_dir, metric, seed)
+        if path is None:
+            warnings.warn(f"Missing {metric} for seed {seed}")
+            continue
+        data.append((seed, np.load(path)))
+    return data
+
+
+def add_mean_if_aligned(ax, curves, color="black"):
+    if len(curves) < 2:
+        return
+    reference_x = curves[0][1]
+    if not all(np.array_equal(x, reference_x) for _, x, _ in curves[1:]):
+        warnings.warn("Curves use different x axes; mean curve was skipped")
+        return
+    values = np.stack([y for _, _, y in curves])
+    ax.plot(reference_x, values.mean(axis=0), color=color, linewidth=2.5,
+            label=f"Mean ({len(curves)} seeds)")
+
+
+def plot_dqn_metric(log_dir, seeds, output_path, raw_metric,
+                    smoothed_metric, x_metric, xlabel, ylabel, title):
+    figure, ax = plt.subplots(figsize=(7, 4.5))
+    colors = plt.get_cmap("tab10")
+    plotted_curves = []
+
+    for color_idx, seed in enumerate(seeds):
+        x_path = find_metric_file(log_dir, x_metric, seed)
+        raw_path = find_metric_file(log_dir, raw_metric, seed)
+        smooth_path = find_metric_file(log_dir, smoothed_metric, seed)
+        if x_path is None or raw_path is None or smooth_path is None:
+            warnings.warn(f"Skipping incomplete metric files for seed {seed}")
+            continue
+
+        x = np.load(x_path)
+        raw = np.load(raw_path)
+        smooth = np.load(smooth_path)
+        if not (len(x) == len(raw) == len(smooth)):
+            warnings.warn(f"Skipping seed {seed}: inconsistent array lengths")
+            continue
+
+        color = colors(color_idx % 10)
+        ax.plot(x, raw, color=color, alpha=0.12, linewidth=0.5)
+        ax.plot(x, smooth, color=color, linewidth=1.5,
+                label=f"Seed {seed}")
+        plotted_curves.append((seed, x, smooth))
+
+    if not plotted_curves:
+        plt.close(figure)
+        warnings.warn(f"No complete data available for {title}")
+        return
+
+    add_mean_if_aligned(ax, plotted_curves)
+    handles, labels = ax.get_legend_handles_labels()
+    handles.append(Line2D([0], [0], color="gray", alpha=0.25,
+                          linewidth=1))
+    labels.append("Raw values")
+    ax.legend(handles, labels, ncol=2)
+    ax.set(xlabel=xlabel, ylabel=ylabel, title=title)
+    ax.grid(alpha=0.3)
+    figure.tight_layout()
+    figure.savefig(output_path, bbox_inches="tight")
+    plt.close(figure)
+
+
+def visualize_dqn_evaluation(log_dir, seeds, output_path):
+    figure, ax = plt.subplots(figsize=(7, 4.5))
+    colors = plt.get_cmap("tab10")
+    plotted_curves = []
+
+    for color_idx, seed in enumerate(seeds):
+        returns = np.load(log_dir / f"J-{seed}.npy")
+        reward_steps_path = find_metric_file(
+            log_dir, "training_reward_steps", seed
+        )
+        if reward_steps_path is not None:
+            total_steps = np.load(reward_steps_path)[-1]
+            x = np.linspace(total_steps / len(returns), total_steps,
+                            len(returns))
+            xlabel = "Environment steps"
+        else:
+            x = np.arange(1, len(returns) + 1)
+            xlabel = "Evaluation checkpoint"
+
+        color = colors(color_idx % 10)
+        ax.plot(x, returns, color=color, linewidth=1.5,
+                marker="o", markersize=3, label=f"Seed {seed}")
+        plotted_curves.append((seed, x, returns))
+
+    add_mean_if_aligned(ax, plotted_curves)
+    ax.set(xlabel=xlabel, ylabel="Cumulative discounted return",
+           title="DQN evaluation performance")
+    ax.grid(alpha=0.3)
+    ax.legend(ncol=2)
+    figure.tight_layout()
+    figure.savefig(output_path, bbox_inches="tight")
+    plt.close(figure)
+
+
+def visualize_dqn_results(log_dir, output_dir):
+    seeds = discover_dqn_seeds(log_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Found completed seeds: {seeds}")
+
+    visualize_dqn_evaluation(
+        log_dir, seeds, output_dir / "dqn_evaluation_returns.pdf"
+    )
+    plot_dqn_metric(
+        log_dir, seeds, output_dir / "dqn_training_rewards.pdf",
+        "training_rewards_raw", "training_rewards",
+        "training_reward_steps", "Environment steps", "Immediate reward",
+        "DQN training reward (rolling mean: 500 steps)",
+    )
+    plot_dqn_metric(
+        log_dir, seeds, output_dir / "dqn_episode_returns.pdf",
+        "episode_returns_raw", "episode_returns", "episode_indices",
+        "Episode", "Episode return",
+        "DQN training episode return (rolling mean: 50 episodes)",
+    )
+    plot_dqn_metric(
+        log_dir, seeds, output_dir / "dqn_episode_lengths.pdf",
+        "episode_lengths_raw", "episode_lengths", "episode_indices",
+        "Episode", "Episode length (steps)",
+        "DQN training episode length (rolling mean: 50 episodes)",
+    )
+    plot_dqn_metric(
+        log_dir, seeds, output_dir / "dqn_td_loss.pdf",
+        "losses_raw", "losses", "loss_steps",
+        "Environment steps", "TD loss (MSE)",
+        "DQN TD loss (rolling mean: 50 training points)",
+    )
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--logs-dir", type=pathlib.Path, default=pathlib.Path("logs"))
+    parser.add_argument(
+        "--dqn-dir", type=pathlib.Path, default=None,
+        help="DQN result directory; when provided, plot DQN instead of Tree-FQI",
+    )
     parser.add_argument("--output-dir", type=pathlib.Path,
                         default=pathlib.Path("figures"))
     return parser.parse_args()
@@ -171,15 +336,18 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    loaded_results = load_results(args.logs_dir)
-    visualize_returns(
-        loaded_results, args.output_dir / "lunarlander_performance.pdf"
-    )
-    visualize_target_returns(
-        loaded_results,
-        args.output_dir / "lunarlander_target_performance.pdf",
-    )
-    visualize_depths(
-        loaded_results, args.output_dir / "lunarlander_depths.pdf"
-    )
+    if args.dqn_dir is not None:
+        visualize_dqn_results(args.dqn_dir, args.output_dir)
+    else:
+        loaded_results = load_results(args.logs_dir)
+        visualize_returns(
+            loaded_results, args.output_dir / "lunarlander_performance.pdf"
+        )
+        visualize_target_returns(
+            loaded_results,
+            args.output_dir / "lunarlander_target_performance.pdf",
+        )
+        visualize_depths(
+            loaded_results, args.output_dir / "lunarlander_depths.pdf"
+        )
     print(f"Saved figures to {args.output_dir}")

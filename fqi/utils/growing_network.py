@@ -15,7 +15,7 @@ from gromo.utils.training_utils import (
     DummyMetric,
     enumerate_dataloader
 )
-from .natural_gradient import natural_gradient_step
+from .natural_gradient import KFAC, KFACConfig
 
 
 def feature_rank(features: np.ndarray, epsilon: float = 0.01):
@@ -209,7 +209,9 @@ def pre_growth_optimize(
     optimizer,
     n_steps: int,
     use_natural_gradient: bool = False,
-    natural_gradient_damping: float = 1e-4,
+    natural_gradient_damping: float = 1e-5,
+    natural_gradient_noise_variance: float = 1.0,
+    natural_gradient_eigenvalue_threshold: float = 1e-7,
 ) -> tuple[float, float, list[float]]:
     """
     Optimize the Bellman loss on a fixed batch before deciding whether to grow.
@@ -217,10 +219,11 @@ def pre_growth_optimize(
     Optimizes L = (1/n)||T^π Q - Φ(W)·θ^T||² jointly over all network weights.
 
     By default, regular backpropagation through ``optimizer`` is used.  When
-    ``use_natural_gradient`` is true, each step applies the empirical natural
-    gradient ``J^dagger (td_targets - Q)``.  The learning rate is read from the
-    optimizer's first parameter group and ``natural_gradient_damping`` controls
-    Tikhonov damping of the empirical Fisher.
+    ``use_natural_gradient`` is true, each step applies the block-diagonal K-FAC
+    update from equations (23)--(27) of the accompanying Tiny K-FAC document.
+    The learning rate is read from the optimizer's first parameter group. The
+    A small positive damping enables the stable Cholesky solve. Passing zero
+    selects the theoretical, thresholded Moore--Penrose path.
 
     Returns (initial_loss, final_loss, loss_history). The network and optimizer
     are updated in place, so W* and θ* are retained for the subsequent growth step.
@@ -231,28 +234,39 @@ def pre_growth_optimize(
         raise ValueError("The optimizer must contain a parameter group.")
 
     _actions = actions.reshape(-1, 1)
-    parameters = [parameter for parameter in network.parameters() if parameter.requires_grad]
+    kfac = None
+    if use_natural_gradient:
+        kfac = KFAC(
+            network,
+            KFACConfig(
+                noise_variance=natural_gradient_noise_variance,
+                damping=natural_gradient_damping,
+                eigenvalue_threshold=natural_gradient_eigenvalue_threshold,
+            ),
+        )
     loss_history = []
     loss = None
     for _ in range(n_steps):
-        phi = network.encode(states)
-        old_val = network.q_head(phi).gather(1, _actions).squeeze()
-        loss = F.mse_loss(td_targets, old_val)
-        loss_history.append(loss.item())
         optimizer.zero_grad()
         if use_natural_gradient:
-            natural_gradient_step(
-                predictions=old_val,
-                targets=td_targets,
-                parameters=parameters,
-                step_size=optimizer.param_groups[0]["lr"],
-                damping=natural_gradient_damping,
+            assert kfac is not None
+            old_val, loss, updates = kfac.compute_updates(
+                states, actions, td_targets
             )
+            kfac.apply_updates_(updates, step_size=optimizer.param_groups[0]["lr"])
         else:
+            phi = network.encode(states)
+            old_val = network.q_head(phi).gather(1, _actions).squeeze()
+            loss = F.mse_loss(td_targets, old_val)
             loss.backward()
             optimizer.step()
+        reported_loss = F.mse_loss(td_targets, old_val)
+        loss_history.append(reported_loss.item())
 
-    return loss_history[0], loss.item(), loss_history
+    with torch.no_grad():
+        final_values = network(states).gather(1, _actions).squeeze()
+        final_loss = F.mse_loss(td_targets, final_values).item()
+    return loss_history[0], final_loss, loss_history
 
 
 @torch.no_grad()

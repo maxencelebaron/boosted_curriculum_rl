@@ -3,7 +3,6 @@
 from dataclasses import asdict, dataclass
 import os
 
-from joblib import Parallel, delayed
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -26,10 +25,8 @@ torch.set_num_threads(1)
 
 @dataclass
 class Args:
-    n_jobs: int = 1
-    """Number of parallel jobs."""
-    n_exp: int = 3
-    """Number of experiments (seeds)."""
+    seed: int = 95
+    """Random seed of the experiment."""
     n_timesteps: int = 1_500_000
     """Total environment steps per experiment."""
     n_eval_points: int = 50
@@ -234,15 +231,13 @@ if __name__ == "__main__":
     args = tyro.cli(Args)
     os.makedirs(args.output_dir, exist_ok=True)
 
-    out = Parallel(n_jobs=args.n_jobs)(
-        delayed(experiment)(95 + k, args.output_dir, args)
-        for k in range(args.n_exp)
-    )
-    returns = np.asarray(out)
-    np.save(os.path.join(args.output_dir, "J.npy"), returns)
+    returns = experiment(args.seed, args.output_dir, args)
 
-    with open(os.path.join(args.output_dir, "config.yaml"), "w") as stream:
+    config_path = os.path.join(
+        args.output_dir, "config-%d.yaml" % args.seed
+    )
+    with open(config_path, "w") as stream:
         yaml.dump(asdict(args), stream, default_flow_style=False,
                   sort_keys=False)
 
-    print("J: ", np.mean(returns, axis=0))
+    print("J: ", returns)

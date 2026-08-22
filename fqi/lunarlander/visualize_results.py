@@ -14,13 +14,13 @@ import warnings
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 import numpy as np
 
 
 BASE_DIR = pathlib.Path(__file__).resolve().parent
 LOGS_DIR = BASE_DIR / "logs"
 FIGURES_DIR = BASE_DIR / "figures"
+MEAN_COLOR = "C3"
 
 plt.rcParams.update({"text.usetex": False, "font.family": "serif"})
 
@@ -39,7 +39,24 @@ def add_mean_if_aligned(ax, curves):
         warnings.warn("Different x axes: the mean curve was not computed")
         return
     values = np.stack([values for _, values in curves])
-    ax.plot(reference_x, values.mean(axis=0), color="black", linewidth=2.5,
+    ax.plot(reference_x, values.mean(axis=0), color=MEAN_COLOR, linewidth=1.5,
+            label=f"Mean ({len(curves)} seeds)")
+
+
+def add_episode_mean(ax, curves):
+    """Average every seed over their common episode-index prefix."""
+    if len(curves) < 2:
+        return
+    common_length = min(len(x) for x, _ in curves)
+    reference_x = curves[0][0][:common_length]
+    if not all(
+        np.array_equal(x[:common_length], reference_x)
+        for x, _ in curves[1:]
+    ):
+        warnings.warn("Episode axes are inconsistent; mean was not computed")
+        return
+    values = np.stack([y[:common_length] for _, y in curves])
+    ax.plot(reference_x, values.mean(axis=0), color=MEAN_COLOR, linewidth=1.5,
             label=f"Mean ({len(curves)} seeds)")
 
 
@@ -47,7 +64,12 @@ def finish_figure(figure, ax, output_path, xlabel, ylabel, title,
                   legend_columns=2):
     ax.set(xlabel=xlabel, ylabel=ylabel, title=title)
     ax.grid(alpha=0.3)
-    ax.legend(ncol=legend_columns)
+    ax.legend(
+        ncol=legend_columns,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1.0),
+        borderaxespad=0,
+    )
     figure.tight_layout()
     figure.savefig(output_path, bbox_inches="tight")
     plt.close(figure)
@@ -270,13 +292,13 @@ class FQIVisualizer:
 
 @dataclass(frozen=True)
 class DQNMetric:
-    raw: str
     smooth: str
     x: str
     filename: str
     xlabel: str
     ylabel: str
     title: str
+    mean_by_episode: bool = False
 
 
 class DQNFileIndex:
@@ -330,24 +352,26 @@ class DQNFileIndex:
 class DQNVisualizer:
     METRICS = (
         DQNMetric(
-            "training_rewards_raw", "training_rewards",
+            "training_rewards",
             "training_reward_steps", "dqn_training_rewards.pdf",
             "Environment steps", "Immediate reward",
             "DQN training reward (rolling mean: 500 steps)",
         ),
         DQNMetric(
-            "episode_returns_raw", "episode_returns", "episode_indices",
+            "episode_returns", "episode_indices",
             "dqn_episode_returns.pdf", "Episode", "Episode return",
             "DQN episode return (rolling mean: 50 episodes)",
+            mean_by_episode=True,
         ),
         DQNMetric(
-            "episode_lengths_raw", "episode_lengths", "episode_indices",
+            "episode_lengths", "episode_indices",
             "dqn_episode_lengths.pdf", "Episode",
             "Episode length (steps)",
             "DQN episode length (rolling mean: 50 episodes)",
+            mean_by_episode=True,
         ),
         DQNMetric(
-            "losses_raw", "losses", "loss_steps", "dqn_td_loss.pdf",
+            "losses", "loss_steps", "dqn_td_loss.pdf",
             "Environment steps", "TD loss (MSE)",
             "DQN TD loss (rolling mean: 50 training points)",
         ),
@@ -361,7 +385,7 @@ class DQNVisualizer:
 
     def plot_metric(self, metric):
         seeds = self.index.complete_seeds(
-            (metric.raw, metric.smooth, metric.x), metric.ylabel
+            (metric.smooth, metric.x), metric.ylabel
         )
         if not seeds:
             warnings.warn(f"No complete data for {metric.ylabel}; plot skipped")
@@ -373,16 +397,14 @@ class DQNVisualizer:
 
         for color_idx, seed in enumerate(seeds):
             x = self.index.load(metric.x, seed)
-            raw = self.index.load(metric.raw, seed)
             smooth = self.index.load(metric.smooth, seed)
-            if not (len(x) == len(raw) == len(smooth)):
+            if len(x) != len(smooth):
                 warnings.warn(
                     f"{metric.ylabel}: inconsistent lengths for seed {seed}; "
                     "seed skipped"
                 )
                 continue
             color = colors(color_idx % 10)
-            ax.plot(x, raw, color=color, alpha=0.12, linewidth=0.5)
             ax.plot(x, smooth, color=color, linewidth=1.5,
                     label=f"Seed {seed}")
             smooth_curves.append((x, smooth))
@@ -390,18 +412,14 @@ class DQNVisualizer:
         if not smooth_curves:
             plt.close(figure)
             return
-        add_mean_if_aligned(ax, smooth_curves)
-        handles, labels = ax.get_legend_handles_labels()
-        handles.append(Line2D([0], [0], color="gray", alpha=0.25))
-        labels.append("Raw values")
-        ax.legend(handles, labels, ncol=2)
-        ax.set(xlabel=metric.xlabel, ylabel=metric.ylabel,
-               title=metric.title)
-        ax.grid(alpha=0.3)
-        figure.tight_layout()
-        figure.savefig(self.output_dir / metric.filename,
-                       bbox_inches="tight")
-        plt.close(figure)
+        if metric.mean_by_episode:
+            add_episode_mean(ax, smooth_curves)
+        else:
+            add_mean_if_aligned(ax, smooth_curves)
+        finish_figure(
+            figure, ax, self.output_dir / metric.filename,
+            metric.xlabel, metric.ylabel, metric.title,
+        )
 
     def plot_evaluation(self):
         seeds = self.index.complete_seeds(("J",), "Evaluation return")

@@ -27,9 +27,9 @@ torch.set_num_threads(1)
 class Args:
     seed: int = 95
     """Random seed of the experiment."""
-    n_timesteps: int = 1_500_000
+    n_timesteps: int = 2_000_000
     """Total environment steps per experiment."""
-    n_eval_points: int = 50
+    n_eval_points: int = 200
     """Number of evaluation checkpoints."""
     n_test_episodes: int = 10
     """Number of episodes at each evaluation checkpoint."""
@@ -37,15 +37,15 @@ class Args:
     """Number of environment steps between training calls."""
     gradient_steps: int = 1
     """Number of gradient updates per training call."""
-    exploration_fraction: float = 0.5
+    exploration_fraction: float = 0.2
     """Fraction of training over which epsilon is annealed."""
     exploration_final_eps: float = 0.01
     """Final epsilon value."""
-    learning_rate: float = 5e-4
+    learning_rate: float = 1e-3
     """Adam learning rate."""
-    batch_size: int = 64
+    batch_size: int = 128
     """Replay-buffer batch size."""
-    buffer_size: int = 10_000
+    buffer_size: int = 100_000
     """Maximum replay-buffer size."""
     learning_starts: int = 1_000
     """Number of transitions collected before learning starts."""

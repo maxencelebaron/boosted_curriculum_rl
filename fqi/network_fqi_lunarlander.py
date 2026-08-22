@@ -38,13 +38,13 @@ class DQNNetwork(nn.Module):
         del kwargs
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(input_shape[0], 64),
+            nn.Linear(input_shape[0], 128),
             nn.ReLU(),
-            nn.Linear(64, 64),
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(64, 32),
+            nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(32, output_shape[0]),
+            nn.Linear(64, output_shape[0]),
         )
 
     def forward(self, state, action=None):

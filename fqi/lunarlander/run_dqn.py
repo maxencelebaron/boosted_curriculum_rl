@@ -30,7 +30,7 @@ class Args:
     """Random seed of the experiment."""
     n_timesteps: int = 1_500_000
     """Total environment steps per experiment."""
-    n_eval_points: int = 200
+    n_eval_points: int = 300
     """Number of evaluation checkpoints."""
     n_test_episodes: int = 10
     """Number of episodes at each evaluation checkpoint."""
@@ -52,6 +52,7 @@ class Args:
     """Number of transitions collected before learning starts."""
     target_update_interval: int = 1_000
     """Number of training calls between target-network updates."""
+
     gravity: float = -10.0
     """LunarLander gravity."""
     enable_wind: bool = True
@@ -60,6 +61,7 @@ class Args:
     """Wind power of the target task."""
     turbulence_power: float = 1.5
     """Turbulence power of the target task."""
+
     use_cuda: bool = True
     """Whether to train the neural network on CUDA."""
     metric_monitoring_batch_size: int = 128

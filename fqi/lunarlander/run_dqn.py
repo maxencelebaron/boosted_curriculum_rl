@@ -11,6 +11,7 @@ import tyro
 import yaml
 
 from fqi.lunarlander.dqn import LunarLanderDQN
+from fqi.lunarlander.dqn_monitoring import DQNMetricsMonitor
 from fqi.lunarlander.env import LunarLander
 from fqi.network_fqi_lunarlander import DQNNetwork
 from mushroom_rl.approximators.parametric import TorchApproximator
@@ -61,6 +62,16 @@ class Args:
     """Turbulence power of the target task."""
     use_cuda: bool = True
     """Whether to train the neural network on CUDA."""
+    metric_monitoring_batch_size: int = 128
+    """Fixed replay sample used for feature rank monitoring."""
+    n_plasticity_measurements: int = 20
+    """Number of uniformly spaced plasticity measurements."""
+    plasticity_n_steps: int = 100
+    """Gradient steps per plasticity probe task."""
+    plasticity_n_tasks: int = 10
+    """Number of random plasticity probe tasks."""
+    plasticity_n_samples: int = 512
+    """Fresh replay samples used by each plasticity measurement."""
     output_dir: str = "logs/dqn_lunarlander"
     """Directory where results are saved."""
 
@@ -200,15 +211,29 @@ def train_dqn(seed, log_dir, args):
     metrics = TrainingMetrics()
     training_core = Core(agent, mdp, callback_step=metrics)
     evaluation_core = Core(agent, mdp)
+    monitor = DQNMetricsMonitor(
+        n_eval_points=args.n_eval_points,
+        monitoring_batch_size=args.metric_monitoring_batch_size,
+        n_plasticity_measurements=args.n_plasticity_measurements,
+        plasticity_n_samples=args.plasticity_n_samples,
+        plasticity_n_steps=args.plasticity_n_steps,
+        plasticity_n_tasks=args.plasticity_n_tasks,
+        learning_rate=args.learning_rate,
+    )
     returns = []
 
-    for _ in range(args.n_eval_points):
+    for evaluation_index in range(1, args.n_eval_points + 1):
         policy.set_epsilon(epsilon)
         metrics.start_block()
         training_core.learn(
             n_steps=steps_per_eval,
             n_steps_per_fit=args.train_freq,
             quiet=True,
+        )
+        monitor.monitor_evaluation(
+            agent,
+            step=len(metrics.step_rewards),
+            evaluation_index=evaluation_index,
         )
 
         policy.set_epsilon(test_epsilon)
@@ -220,6 +245,7 @@ def train_dqn(seed, log_dir, args):
 
     np.save(os.path.join(log_dir, "J-%d.npy" % seed), returns)
     save_training_metrics(log_dir, seed, metrics, agent)
+    monitor.save(log_dir, seed)
     return returns
 
 

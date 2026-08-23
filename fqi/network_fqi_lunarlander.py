@@ -37,18 +37,25 @@ class DQNNetwork(nn.Module):
     def __init__(self, input_shape, output_shape, **kwargs):
         del kwargs
         super().__init__()
-        self.net = nn.Sequential(
+        self.encoder = nn.Sequential(
             nn.Linear(input_shape[0], 128),
             nn.ReLU(),
             nn.Linear(128, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(64, output_shape[0]),
         )
+        self.q_head = nn.Linear(64, output_shape[0])
+
+    @property
+    def encoder_size(self):
+        return self.q_head.in_features
+
+    def encode(self, state):
+        return self.encoder(state.float())
 
     def forward(self, state, action=None):
-        q = self.net(state.float())
+        q = self.q_head(self.encode(state))
         if action is not None:
             q = q.gather(1, action.long()).squeeze(1)
         return q

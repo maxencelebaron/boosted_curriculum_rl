@@ -122,6 +122,23 @@ def bellman_residual_correlation(phi_new: np.ndarray, R: np.ndarray) -> float:
     return float(np.linalg.norm(phi_new.T @ R, 'fro'))
 
 
+def normalized_bellman_residual_correlation(
+    phi_new: np.ndarray,
+    residual: np.ndarray,
+    epsilon: float = 1e-12,
+) -> float:
+    """Scale-invariant alignment between new features and TD residuals."""
+    if epsilon <= 0:
+        raise ValueError("epsilon must be strictly positive")
+    numerator = np.linalg.norm(phi_new.T @ residual, "fro")
+    denominator = (
+        np.linalg.norm(phi_new, "fro")
+        * np.linalg.norm(residual, "fro")
+        + epsilon
+    )
+    return float(numerator / denominator)
+
+
 def compute_metrics(
     model: nn.Module,
     monitoring_states: torch.Tensor,
@@ -147,12 +164,17 @@ def compute_metrics(
     mon_actions = monitoring_actions.to(device)
     mon_targets = monitoring_targets.to(device)
 
+    was_training = model.training
     model.eval()
     with torch.no_grad():
         features = model.encode(mon_states).cpu().numpy()
-
-    with torch.no_grad():
-        q_pred = model(mon_states).gather(1, mon_actions.unsqueeze(1)).squeeze().cpu().numpy()
+        q_pred = (
+            model(mon_states)
+            .gather(1, mon_actions.unsqueeze(1))
+            .squeeze()
+            .cpu()
+            .numpy()
+        )
     bellman_residual = float(np.mean((mon_targets.cpu().numpy() - q_pred) ** 2))
 
     rank, svs = feature_rank(features)
@@ -181,6 +203,9 @@ def compute_metrics(
             q_brc = model(mon_states).gather(1, mon_actions.unsqueeze(1)).squeeze().cpu().numpy()
         r_brc = (mon_targets.cpu().numpy() - q_brc).reshape(-1, 1)
         brc = bellman_residual_correlation(phi_new, r_brc)
+        brc_normalized = normalized_bellman_residual_correlation(
+            phi_new, r_brc
+        )
 
         result.update({
             "rank_old": rank_old,
@@ -195,9 +220,10 @@ def compute_metrics(
             "angles_max": float(cosines.max()),
             "angles_mean": float(cosines.mean()),
             "brc": brc,
+            "brc_normalized": brc_normalized,
         })
 
-    model.train()
+    model.train(was_training)
     return result
 
 

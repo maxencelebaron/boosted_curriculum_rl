@@ -16,6 +16,10 @@ import tyro
 import yaml
 
 from fqi.lunarlander.dqn import LunarLanderDQN
+from fqi.lunarlander.dqn_monitoring import (
+    DQNMetricsMonitor,
+    replay_batch_to_tensors,
+)
 from fqi.lunarlander.env import LunarLander
 from fqi.lunarlander.run_dqn import TrainingMetrics, save_training_metrics
 
@@ -25,10 +29,7 @@ from mushroom_rl.policy import EpsGreedy
 from mushroom_rl.utils.dataset import compute_J
 from mushroom_rl.utils.parameters import LinearParameter, Parameter
 
-from fqi.utils.growing_network import (
-    pre_growth_optimize,
-    compute_metrics
-)
+from fqi.utils.growing_network import pre_growth_optimize
 
 
 torch.set_num_threads(1)
@@ -48,7 +49,7 @@ class Args:
     """Random seed of the experiment."""
     n_timesteps: int = 1_500_000
     """Total number of environment steps."""
-    n_eval_points: int = 200
+    n_eval_points: int = 300
     """Number of evaluation checkpoints."""
     n_test_episodes: int = 10
     """Number of episodes at each evaluation checkpoint."""
@@ -104,18 +105,16 @@ class Args:
     """Threshold to consider an eigenvalue as zero in the SVD"""
     statistical_threshold: float = 0.0
     """Threshold to decide how many singular values (number of neurons) to keep"""
-    feature_rank_n_states: int = 2_000
+    metric_monitoring_batch_size: int = 128
     """Fixed replay sample used to monitor representation metrics."""
-    compute_final_feature_rank: bool = False
-    """if toggled, compute feature rank over a policy rollout after training"""
-    plasticity_n_steps: int = 2_000
+    n_plasticity_measurements: int = 20
+    """Number of evenly spaced plasticity measurements."""
+    plasticity_n_steps: int = 100
     """number of gradient steps per probe task in plasticity measurement"""
     plasticity_n_tasks: int = 10
     """number of random probe tasks for plasticity measurement"""
-    plasticity_n_samples: int = 1_000
+    plasticity_n_samples: int = 512
     """number of replay buffer samples for plasticity measurement"""
-    plasticity_final_n_tasks: int = 50
-    """number of random probe tasks for the final plasticity measurement"""
     bellman_residual_threshold: float = 0.0
     """Skip growth when the pre-growth loss is below this value."""
 
@@ -168,21 +167,6 @@ def _validate_args(args: Args):
         )
 
 
-def _to_tensors(agent, replay_batch):
-    states, actions, rewards, next_states, absorbing, _ = replay_batch
-    if agent._clip_reward:
-        rewards = np.clip(rewards, -1, 1)
-    td_targets = rewards + agent.mdp_info.gamma * agent._next_q(
-        next_states, absorbing
-    )
-    device = next(agent.approximator.model.network.parameters()).device
-    return (
-        torch.as_tensor(states, dtype=torch.float32, device=device),
-        torch.as_tensor(actions.reshape(-1), dtype=torch.long, device=device),
-        torch.as_tensor(td_targets, dtype=torch.float32, device=device),
-    )
-
-
 def _reset_adam(torch_approximator, learning_rate):
     torch_approximator._optimizer = optim.Adam(
         torch_approximator.network.parameters(), lr=learning_rate
@@ -197,19 +181,7 @@ def _save_growth_results(log_dir, seed, controller: GrowthController):
     ) as stream:
         yaml.safe_dump(controller.events, stream, sort_keys=False)
 
-    np.save(
-        os.path.join(log_dir, f"growth-metric-steps-{seed}.npy"),
-        np.asarray(controller.metric_steps, dtype=int),
-    )
-    metric_names = sorted({
-        key for metrics in controller.metrics for key in metrics
-    })
-    for name in metric_names:
-        values = [metrics.get(name, np.nan) for metrics in controller.metrics]
-        np.save(
-            os.path.join(log_dir, f"growth-metric-{name}-{seed}.npy"),
-            np.asarray(values, dtype=float),
-        )
+    controller.metrics_monitor.save(log_dir, seed)
 
 
 class GrowthController:
@@ -227,10 +199,15 @@ class GrowthController:
         self.next_event = 0
         self.training_environment_steps = 0
         self.events = []
-        self.metric_steps = []
-        self.metrics = []
-        self.feature_split = 0
-        self.monitoring_batch = None
+        self.metrics_monitor = DQNMetricsMonitor(
+            n_eval_points=args.n_eval_points,
+            monitoring_batch_size=args.metric_monitoring_batch_size,
+            n_plasticity_measurements=args.n_plasticity_measurements,
+            plasticity_n_samples=args.plasticity_n_samples,
+            plasticity_n_steps=args.plasticity_n_steps,
+            plasticity_n_tasks=args.plasticity_n_tasks,
+            learning_rate=args.learning_rate,
+        )
 
     def record_environment_step(self):
         self.training_environment_steps += 1
@@ -252,7 +229,7 @@ class GrowthController:
         network = online.network
         hidden_before = network.encoder_size
         neurons_to_add = max(0, target_width - hidden_before)
-        states, actions, td_targets = _to_tensors(
+        states, actions, td_targets = replay_batch_to_tensors(
             agent, agent._replay_memory.get(self.args.grow_batch_size)
         )
         pre_growth_losses = []
@@ -288,7 +265,6 @@ class GrowthController:
                 return
 
         singular_values = []
-        self.feature_split = hidden_before
         if self.args.growth_mode in ("random", "random-0"):
             new_network = self.module.grow_network(
                 network,
@@ -336,33 +312,25 @@ class GrowthController:
             "pre_growth_losses": [float(x) for x in pre_growth_losses],
             "singular_values": [float(x) for x in singular_values],
         })
+        if hidden_after > hidden_before:
+            self.metrics_monitor.register_growth(
+                agent=agent,
+                event_index=self.next_event,
+                start=hidden_before,
+                end=hidden_after,
+                step=self.training_environment_steps,
+            )
         print(
             f"Growth at step {self.training_environment_steps}: "
             f"{hidden_before} -> {hidden_after} neurons"
         )
 
-    def monitor(self, agent):
-        if not agent._replay_memory.initialized:
-            return
-        if self.monitoring_batch is None:
-            self.monitoring_batch = agent._replay_memory.get(
-                self.args.feature_rank_n_states
-            )
-        states, actions, td_targets = _to_tensors(
-            agent, self.monitoring_batch
+    def monitor(self, agent, evaluation_index):
+        self.metrics_monitor.monitor_evaluation(
+            agent=agent,
+            step=self.training_environment_steps,
+            evaluation_index=evaluation_index,
         )
-        values = compute_metrics(
-            model=agent.approximator.model.network,
-            monitoring_states=states,
-            monitoring_actions=actions,
-            monitoring_targets=td_targets,
-            feature_split=self.feature_split,
-        )
-        values["hidden_size"] = (
-            agent.approximator.model.network.encoder_size
-        )
-        self.metric_steps.append(int(self.training_environment_steps))
-        self.metrics.append(values)
 
 
 class GrowingLunarLanderDQN(LunarLanderDQN):
@@ -453,7 +421,7 @@ def experiment(args: Args):
     returns = []
 
     try:
-        for _ in range(args.n_eval_points):
+        for evaluation_index in range(1, args.n_eval_points + 1):
             policy.set_epsilon(epsilon)
             training_metrics.start_block()
             training_core.learn(
@@ -461,7 +429,7 @@ def experiment(args: Args):
                 n_steps_per_fit=args.train_freq,
                 quiet=True,
             )
-            controller.monitor(agent)
+            controller.monitor(agent, evaluation_index)
 
             policy.set_epsilon(test_epsilon)
             dataset = evaluation_core.evaluate(

@@ -9,15 +9,6 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from mushroom_rl.utils.dataset import parse_dataset
 
-from fqi.utils.growing_network import (
-    feature_rank,
-    srank,
-    measure_plasticity,
-    principal_angle_cosines,
-    bellman_residual_correlation,
-    pre_growth_optimize,
-)
-
 
 class Q_Network(nn.Module):
     """
@@ -45,6 +36,59 @@ class Q_Network(nn.Module):
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         return self.q_head(self.encode(state))
+
+
+class DQNNetwork(nn.Module):
+    """Growable DQN MLP with dimensions inferred from the environment."""
+
+    def __init__(
+        self,
+        input_shape,
+        output_shape,
+        hidden_size: int,
+        first_hidden_size: int = 128,
+        second_hidden_size: int = 128,
+        **kwargs,
+    ):
+        del kwargs
+        super().__init__()
+        self.input_shape = tuple(input_shape)
+        self.output_shape = tuple(output_shape)
+        self.first_hidden_size = first_hidden_size
+        self.second_hidden_size = second_hidden_size
+        self.h1 = nn.Sequential(
+            nn.Linear(self.input_shape[0], first_hidden_size),
+            nn.ReLU(),
+            nn.Linear(first_hidden_size, second_hidden_size),
+            nn.ReLU(),
+        )
+        self.encoder = nn.Sequential(
+            nn.Linear(second_hidden_size, hidden_size),
+            nn.ReLU(),
+        )
+        self.q_head = nn.Linear(hidden_size, self.output_shape[0])
+
+    @property
+    def encoder_size(self) -> int:
+        return self.encoder[0].out_features
+
+    def encode(self, state: torch.Tensor) -> torch.Tensor:
+        return self.encoder(self.h1(state.float()))
+
+    def forward(self, state: torch.Tensor, action=None) -> torch.Tensor:
+        q = self.q_head(self.encode(state))
+        if action is not None:
+            q = q.gather(1, action.long().reshape(-1, 1)).squeeze(1)
+        return q
+
+    def new_with_hidden_size(self, hidden_size: int):
+        return type(self)(
+            self.input_shape,
+            self.output_shape,
+            hidden_size=hidden_size,
+            first_hidden_size=self.first_hidden_size,
+            second_hidden_size=self.second_hidden_size,
+        )
 
 
 class NeuralRegressor:
@@ -127,25 +171,36 @@ class NeuralRegressor:
             return self._model.encode(s).numpy()
 
 
-def grow_network(old_net: Q_Network, new_hidden: int) -> Q_Network:
+def grow_network(
+    old_net: Q_Network,
+    new_hidden: int,
+    zero_fan_out: bool = False,
+) -> Q_Network:
     """
     Expand encoder from old_h to new_hidden.
+    When zero_fan_out is True, connections from the new neurons to q_head
+    are initialized to zero, making the growth function-preserving.
     The NeuralRegressor optimizer must be reset after calling this.
     """
     old_h = old_net.encoder[0].out_features
 
-    new_net = Q_Network(hidden_size=new_hidden)
+    if hasattr(old_net, "new_with_hidden_size"):
+        new_net = old_net.new_with_hidden_size(new_hidden)
+    else:
+        new_net = Q_Network(hidden_size=new_hidden)
+    new_net.to(next(old_net.parameters()).device)
 
     with torch.no_grad():
-        new_net.h1[0].weight.copy_(old_net.h1[0].weight)
-        new_net.h1[0].bias.copy_(old_net.h1[0].bias)
+        new_net.h1.load_state_dict(old_net.h1.state_dict())
 
         # encoder: copy old rows, new rows keep random init
         new_net.encoder[0].weight[:old_h].copy_(old_net.encoder[0].weight)
         new_net.encoder[0].bias[:old_h].copy_(old_net.encoder[0].bias)
 
-        # q_head: copy old columns, new columns keep random init
+        # q_head: copy old columns; optionally zero the new fan-out columns
         new_net.q_head.weight[:, :old_h].copy_(old_net.q_head.weight)
+        if zero_fan_out:
+            new_net.q_head.weight[:, old_h:].zero_()
         new_net.q_head.bias.copy_(old_net.q_head.bias)
 
     return new_net

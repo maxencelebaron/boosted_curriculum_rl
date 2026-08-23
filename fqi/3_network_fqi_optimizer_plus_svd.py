@@ -10,14 +10,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from mushroom_rl.utils.dataset import parse_dataset
 
-from fqi.utils.growing_network import (
-    feature_rank,
-    srank,
-    measure_plasticity,
-    principal_angle_cosines,
-    bellman_residual_correlation,
-    pre_growth_optimize,
-)
+from fqi.utils.activations import ReLUDerivativeOneAtZeroFunctorch
 
 
 class Q_Network(nn.Module):
@@ -46,6 +39,59 @@ class Q_Network(nn.Module):
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         return self.q_head(self.encode(state))
+
+
+class DQNNetwork(nn.Module):
+    """Growable DQN MLP"""
+
+    def __init__(
+        self,
+        input_shape,
+        output_shape,
+        hidden_size: int,
+        first_hidden_size: int = 128,
+        second_hidden_size: int = 128,
+        **kwargs,
+    ):
+        del kwargs
+        super().__init__()
+        self.input_shape = tuple(input_shape)
+        self.output_shape = tuple(output_shape)
+        self.first_hidden_size = first_hidden_size
+        self.second_hidden_size = second_hidden_size
+        self.h1 = nn.Sequential(
+            nn.Linear(self.input_shape[0], first_hidden_size),
+            nn.ReLU(),
+            nn.Linear(first_hidden_size, second_hidden_size),
+            nn.ReLU(),
+        )
+        self.encoder = nn.Sequential(
+            nn.Linear(second_hidden_size, hidden_size),
+            ReLUDerivativeOneAtZeroFunctorch(),
+        )
+        self.q_head = nn.Linear(hidden_size, self.output_shape[0])
+
+    @property
+    def encoder_size(self) -> int:
+        return self.encoder[0].out_features
+
+    def encode(self, state: torch.Tensor) -> torch.Tensor:
+        return self.encoder(self.h1(state.float()))
+
+    def forward(self, state: torch.Tensor, action=None) -> torch.Tensor:
+        q = self.q_head(self.encode(state))
+        if action is not None:
+            q = q.gather(1, action.long().reshape(-1, 1)).squeeze(1)
+        return q
+
+    def new_with_hidden_size(self, hidden_size: int):
+        return type(self)(
+            self.input_shape,
+            self.output_shape,
+            hidden_size=hidden_size,
+            first_hidden_size=self.first_hidden_size,
+            second_hidden_size=self.second_hidden_size,
+        )
 
 
 class NeuralRegressor:
@@ -137,65 +183,305 @@ def grow_network_svd(
     numerical_threshold: float = 1e-6,
 ) -> tuple[Q_Network, np.ndarray]:
     """
-    Grow encoder from old_h to old_h + d_a neurons using SVD.
+    Grow the encoder from ``old_h`` to ``old_h + d_a_svd`` neurons.
 
-    Φ_prev = U Σ V^T (output of h1, the fixed layer before the encoder)
-    W_a  = Σ^(-1/2) V[:, :d_a]^T   (top-d_a right singular vectors of phi_prev)
-    R[k, i] = y_k - Q*(s_k, i)  if a_k = i  (true Bellman residual)
-    R[k, i] = 0 - Q*(s_k, i)    if a_k ≠ i  (target fixed at 0)
-    θ_a  = R^T · U[:, :d_a] · Σ^(-1/2)  (n_actions, d_a)
+    The new neurons are initialized to approximate the Bellman residuals of
+    the actions observed in the batch. We assume that the activation of the
+    added neurons is locally linear around zero:
+
+        sigma(z) ≈ z,
+
+    corresponding to sigma(0) = 0 and sigma'(0) = 1.
+
+    Let
+
+        phi_k = old_net.h1(s_k),
+        x_k   = [phi_k, 1],
+
+    where the last coordinate accounts for the encoder bias, and let
+
+        r_k = td_target_k - Q_old(s_k, a_k)
+
+    denote the Bellman residual of the sampled action.
+
+    For each action ``a``, we solve independently
+
+        M[a] = argmin_m sum_{k : a_k = a} (r_k - m x_k)^2.
+
+    The solution is computed using the truncated pseudoinverse of the feature
+    matrix associated with action ``a``. Singular values smaller than
+    ``numerical_threshold`` are discarded using an absolute threshold.
+
+    Samples associated with other actions impose no artificial target on
+    action ``a``. If an action is absent from the batch, its row in ``M`` is
+    set to zero, following the minimum-norm convention.
+
+    After constructing all rows of ``M``, we compute its truncated SVD:
+
+        M ≈ U_d Sigma_d V_d^T,
+
+    and use the balanced factorization
+
+        theta_a      = U_d Sigma_d^(1/2),
+        [W_a, b_a]   = Sigma_d^(1/2) V_d^T.
+
+    Therefore,
+
+        theta_a @ [W_a, b_a] ≈ M.
+
+    The factorization is exact if ``d_a`` is at least the numerical rank of
+    ``M``. Otherwise, it is the best rank-``d_a`` approximation of ``M`` in
+    Frobenius norm.
+
+    Parameters
+    ----------
+    old_net:
+        Network to enlarge. All existing parameters are preserved.
+    states:
+        Batch of input states.
+    actions:
+        Integer action selected for each state.
+    td_targets:
+        Scalar TD target associated with each transition.
+    d_a:
+        Maximum number of neurons to add.
+    numerical_threshold:
+        Absolute threshold below which singular values are treated as zero.
+
+    Returns
+    -------
+    new_net:
+        Enlarged network with analytically initialized new neurons.
+    singular_values:
+        Singular values of ``M`` retained in the factorization.
     """
+    if d_a < 0:
+        raise ValueError(f"d_a must be nonnegative, got {d_a}")
+
+    if numerical_threshold < 0:
+        raise ValueError(
+            "numerical_threshold must be nonnegative, "
+            f"got {numerical_threshold}"
+        )
+
     old_h = old_net.q_head.in_features
+    n_actions = old_net.q_head.out_features
+
+    reference_parameter = next(old_net.parameters())
+    device = reference_parameter.device
+    dtype = reference_parameter.dtype
+
+    states_model = states.to(device=device, dtype=dtype)
 
     with torch.no_grad():
-        # Φ_prev: output of h1 (analog of conv+flatten in DQN)
-        phi_prev = old_net.h1(states.float()).cpu().numpy()
-
-        # R[k, i]: Bellman residual for action i in sample k
-        q_all_np = old_net(states).cpu().numpy()  # (B, n_actions)
-        R = -q_all_np.copy()  # target=0 residuals for all actions
-        td_target_np = td_targets.cpu().numpy()
-        actions_np = actions.squeeze().cpu().numpy().astype(int)
-        R[np.arange(len(actions_np)), actions_np] = (
-            td_target_np - q_all_np[np.arange(len(actions_np)), actions_np]
+        # Fixed features preceding the encoder.
+        phi_prev = (
+            old_net.h1(states_model)
+            .detach()
+            .cpu()
+            .numpy()
         )
 
-    # SVD of Φ_prev augmented with ones (weight + bias)
-    phi_aug = np.concatenate(
-        [phi_prev, np.ones((phi_prev.shape[0], 1))],
-        axis=1
+        # Predictions of the original network for every action.
+        q_all = (
+            old_net(states_model)
+            .detach()
+            .cpu()
+            .numpy()
+        )
+
+    actions_np = (
+        actions.detach()
+        .reshape(-1)
+        .cpu()
+        .numpy()
+        .astype(np.int64)
     )
-    U, S, Vt = np.linalg.svd(phi_aug, full_matrices=False)
-    k = len(S)  # number of non null singular values (can be lower than d_a)
-    if k < d_a:
-        print(
-            f"Warning: d_a={d_a} > rank(Φ_prev)={k}, the number of non null\
-            singular values, initializing {k} new neurons"
+    td_targets_np = (
+        td_targets.detach()
+        .reshape(-1)
+        .cpu()
+        .numpy()
+    )
+
+    batch_size = phi_prev.shape[0]
+
+    if actions_np.shape[0] != batch_size:
+        raise ValueError(
+            "states and actions must contain the same number of samples"
         )
-    d_a_svd = min(d_a, k)  # number of initialized new neurons with SVD
 
-    # Σ^{-1/2} with convention 0^(-1) = 0
-    sigma_half_plus = np.where(S[:d_a_svd] > numerical_threshold, 1.0 / np.sqrt(S[:d_a_svd]), 0.0)
+    if td_targets_np.shape[0] != batch_size:
+        raise ValueError(
+            "states and td_targets must contain the same number of samples"
+        )
 
-    W_a = sigma_half_plus[:, None] * Vt[:d_a_svd, :-1]
-    b_a = sigma_half_plus * Vt[:d_a_svd, -1]
+    if np.any(actions_np < 0) or np.any(actions_np >= n_actions):
+        raise ValueError(
+            f"Action indices must belong to [0, {n_actions - 1}]"
+        )
 
-    # θ_a = R^T · U[:, :d_a_svd] · Σ^{-1/2}  shape: (n_actions, d_a_svd)
-    theta_a = (R.T @ U[:, :d_a_svd]) * sigma_half_plus
+    # Augment the fixed features with a constant coordinate for the bias:
+    #
+    #     X[k] = [phi_prev[k], 1].
+    #
+    X = np.concatenate(
+        [
+            phi_prev,
+            np.ones(
+                (batch_size, 1),
+                dtype=phi_prev.dtype,
+            ),
+        ],
+        axis=1,
+    )
 
-    # Build new network and wire in the analytically initialized weights
-    new_net = Q_Network(hidden_size=old_h + d_a_svd)
+    # Only the Q-value of the sampled action enters the Bellman residual.
+    selected_q = q_all[
+        np.arange(batch_size),
+        actions_np,
+    ]
+    residuals = td_targets_np - selected_q
+
+    # M has one regression row per action. Rows corresponding to actions
+    # absent from the batch remain equal to zero.
+    M = np.zeros(
+        (n_actions, X.shape[1]),
+        dtype=X.dtype,
+    )
+
+    for action in range(n_actions):
+        action_mask = actions_np == action
+
+        if not np.any(action_mask):
+            continue
+
+        X_action = X[action_mask]
+        residuals_action = residuals[action_mask]
+
+        # Explicit SVD of the action-specific feature matrix:
+        #
+        #     X_action = U_a diag(S_a) Vt_a.
+        #
+        U_a, S_a, Vt_a = np.linalg.svd(
+            X_action,
+            full_matrices=False,
+        )
+
+        # Truncated pseudoinverse with an absolute cutoff.
+        S_a_plus = np.zeros_like(S_a)
+        retained = S_a > numerical_threshold
+        S_a_plus[retained] = 1.0 / S_a[retained]
+
+        # Minimum-norm least-squares solution:
+        #
+        #     M[action]
+        #         = X_action^† residuals_action
+        #         = V_a diag(S_a^+) U_a^T residuals_action.
+        #
+        M[action] = (
+            Vt_a.T
+            @ (
+                S_a_plus
+                * (U_a.T @ residuals_action)
+            )
+        )
+
+    # Factorize the residual operator M.
+    U, S, Vt = np.linalg.svd(
+        M,
+        full_matrices=False,
+    )
+
+    numerical_rank = int(
+        np.sum(S > numerical_threshold)
+    )
+    d_a_svd = min(d_a, numerical_rank)
+
+    if d_a > numerical_rank:
+        print(
+            f"Warning: d_a={d_a} > rank(M)={numerical_rank}; "
+            f"initializing {d_a_svd} new neurons."
+        )
+
+    # Balanced factorization:
+    #
+    #     M_d = theta_a @ [W_a, b_a].
+    #
+    sqrt_S = np.sqrt(S[:d_a_svd])
+
+    theta_a = (
+        U[:, :d_a_svd]
+        * sqrt_S[None, :]
+    )
+
+    encoder_augmented = (
+        sqrt_S[:, None]
+        * Vt[:d_a_svd, :]
+    )
+
+    W_a = encoder_augmented[:, :-1]  # transpos
+    b_a = encoder_augmented[:, -1]
+
+    # Construct the enlarged network.
+    if hasattr(old_net, "new_with_hidden_size"):
+        new_net = old_net.new_with_hidden_size(
+            old_h + d_a_svd
+        )
+    else:
+        new_net = Q_Network(
+            hidden_size=old_h + d_a_svd
+        )
+
+    new_net.to(device=device, dtype=dtype)
+
     with torch.no_grad():
-        new_net.h1[0].weight.copy_(old_net.h1[0].weight)
-        new_net.h1[0].bias.copy_(old_net.h1[0].bias)
+        # Preserve the fixed feature extractor.
+        new_net.h1.load_state_dict(
+            old_net.h1.state_dict()
+        )
 
-        new_net.encoder[0].weight[:old_h, :].copy_(old_net.encoder[0].weight)
-        new_net.encoder[0].weight[old_h:, :].copy_(torch.as_tensor(W_a, dtype=torch.float32))
-        new_net.encoder[0].bias[:old_h].copy_(old_net.encoder[0].bias)
-        new_net.encoder[0].bias[old_h:].copy_(torch.as_tensor(b_a, dtype=torch.float32))
+        # Preserve the existing encoder neurons.
+        new_net.encoder[0].weight[:old_h].copy_(
+            old_net.encoder[0].weight
+        )
+        new_net.encoder[0].bias[:old_h].copy_(
+            old_net.encoder[0].bias
+        )
 
-        new_net.q_head.weight[:, :old_h].copy_(old_net.q_head.weight)
-        new_net.q_head.weight[:, old_h:].copy_(torch.as_tensor(theta_a, dtype=torch.float32))
-        new_net.q_head.bias.copy_(old_net.q_head.bias)
+        # Initialize the added encoder neurons.
+        new_net.encoder[0].weight[old_h:].copy_(
+            torch.as_tensor(
+                W_a,
+                device=device,
+                dtype=dtype,
+            )
+        )
+        new_net.encoder[0].bias[old_h:].copy_(
+            torch.as_tensor(
+                b_a,
+                device=device,
+                dtype=dtype,
+            )
+        )
+
+        # Preserve the existing output weights.
+        new_net.q_head.weight[:, :old_h].copy_(
+            old_net.q_head.weight
+        )
+
+        # Connect the added neurons to the output.
+        new_net.q_head.weight[:, old_h:].copy_(
+            torch.as_tensor(
+                theta_a,
+                device=device,
+                dtype=dtype,
+            )
+        )
+
+        # Preserve the existing output bias.
+        new_net.q_head.bias.copy_(
+            old_net.q_head.bias
+        )
 
     return new_net, S[:d_a_svd]

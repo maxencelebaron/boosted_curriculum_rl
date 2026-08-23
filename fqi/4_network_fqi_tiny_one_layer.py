@@ -1,4 +1,4 @@
-"Tiny (Natural gradient Only on the last parameter"
+"Tiny"
 
 import copy
 import numpy as np
@@ -9,17 +9,9 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 
 from gromo.modules.linear_growing_module import LinearGrowingModule
+from fqi.utils.activations import ReLUDerivativeOneAtZeroFunctorch
 
 from mushroom_rl.utils.dataset import parse_dataset
-
-from fqi.utils.growing_network import (
-    feature_rank,
-    srank,
-    measure_plasticity,
-    principal_angle_cosines,
-    bellman_residual_correlation,
-    pre_growth_optimize,
-)
 
 from fqi.utils.growing_network import (
     line_search
@@ -59,6 +51,57 @@ class Q_Network(nn.Module):
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         return self.q_head(self.encode(state))
+
+
+class DQNNetwork(nn.Module):
+    """Growable Gromo DQN MLP"""
+
+    def __init__(
+        self,
+        input_shape,
+        output_shape,
+        hidden_size: int,
+        first_hidden_size: int = 128,
+        second_hidden_size: int = 128,
+        **kwargs,
+    ):
+        del kwargs
+        super().__init__()
+        self.input_shape = tuple(input_shape)
+        self.output_shape = tuple(output_shape)
+        self.first_hidden_size = first_hidden_size
+        self.second_hidden_size = second_hidden_size
+        self.h1 = nn.Sequential(
+            nn.Linear(self.input_shape[0], first_hidden_size),
+            nn.ReLU(),
+            nn.Linear(first_hidden_size, second_hidden_size),
+            nn.ReLU(),
+        )
+        self.encoder = LinearGrowingModule(
+            in_features=second_hidden_size,
+            out_features=hidden_size,
+            post_layer_function=ReLUDerivativeOneAtZeroFunctorch(),
+            name="encoder",
+        )
+        self.q_head = LinearGrowingModule(
+            in_features=hidden_size,
+            out_features=self.output_shape[0],
+            previous_module=self.encoder,
+            name="q_head",
+        )
+
+    @property
+    def encoder_size(self) -> int:
+        return self.encoder.out_features
+
+    def encode(self, state: torch.Tensor) -> torch.Tensor:
+        return self.encoder(self.h1(state.float()))
+
+    def forward(self, state: torch.Tensor, action=None) -> torch.Tensor:
+        q = self.q_head(self.encode(state))
+        if action is not None:
+            q = q.gather(1, action.long().reshape(-1, 1)).squeeze(1)
+        return q
 
 
 class NeuralRegressor:

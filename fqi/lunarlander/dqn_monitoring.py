@@ -46,12 +46,21 @@ def replay_batch_to_tensors(agent, replay_batch):
     td_targets = rewards + agent.mdp_info.gamma * agent._next_q(
         next_states, absorbing
     )
-    device = next(agent.approximator.model.network.parameters()).device
+    device = next(_active_networks(agent)[-1].parameters()).device
     return (
         torch.as_tensor(states, dtype=torch.float32, device=device),
         torch.as_tensor(actions.reshape(-1), dtype=torch.long, device=device),
         torch.as_tensor(td_targets, dtype=torch.float32, device=device),
     )
+
+
+def _active_networks(agent):
+    """Return the neural networks contributing to the current Q-function."""
+    model = agent.approximator.model
+    if hasattr(model, "_model"):  # MushroomRL Ensemble
+        last = getattr(agent, "_curriculum_idx", len(model) - 1)
+        return [model[idx].network for idx in range(last + 1)]
+    return [model.network]
 
 
 class DQNMetricsMonitor:
@@ -89,13 +98,19 @@ class DQNMetricsMonitor:
 
         self.fixed_batch = None
         self.steps = []
+        self.task_indices = []
         self.ranks = []
         self.rank_ratios = []
         self.sranks = []
         self.srank_ratios = []
         self.plasticity_steps = []
+        self.plasticity_task_indices = []
         self.plasticities = []
         self.generations = []
+
+    def start_task(self):
+        """Discard monitoring transitions belonging to the previous MDP."""
+        self.fixed_batch = None
 
     def _ensure_fixed_batch(self, agent):
         if self.fixed_batch is None:
@@ -108,19 +123,24 @@ class DQNMetricsMonitor:
         states, actions, td_targets = replay_batch_to_tensors(
             agent, replay_batch
         )
-        network = agent.approximator.model.network
-        was_training = network.training
-        network.eval()
+        networks = _active_networks(agent)
+        training_modes = [network.training for network in networks]
+        for network in networks:
+            network.eval()
         with torch.no_grad():
-            features = network.encode(states).cpu().numpy()
+            features = torch.cat(
+                [network.encode(states) for network in networks], dim=1
+            ).cpu().numpy()
+            q_values = sum(network(states) for network in networks)
             predictions = (
-                network(states)
+                q_values
                 .gather(1, actions.reshape(-1, 1))
                 .squeeze(1)
                 .cpu()
                 .numpy()
             )
-        network.train(was_training)
+        for network, was_training in zip(networks, training_modes):
+            network.train(was_training)
         residual = (td_targets.cpu().numpy() - predictions).reshape(-1, 1)
         return features, residual
 
@@ -169,7 +189,9 @@ class DQNMetricsMonitor:
         )
 
     @_preserve_random_states
-    def monitor_evaluation(self, agent, step, evaluation_index):
+    def monitor_evaluation(
+        self, agent, step, evaluation_index, task_index=0
+    ):
         if not agent._replay_memory.initialized:
             return
         self._ensure_fixed_batch(agent)
@@ -180,6 +202,7 @@ class DQNMetricsMonitor:
         effective_rank = srank(singular_values)
         feature_dimension = features.shape[1]
         self.steps.append(int(step))
+        self.task_indices.append(int(task_index))
         self.ranks.append(rank)
         self.rank_ratios.append(rank / feature_dimension)
         self.sranks.append(effective_rank)
@@ -191,7 +214,7 @@ class DQNMetricsMonitor:
         if evaluation_index in self.plasticity_checkpoints:
             fresh_batch = agent._replay_memory.get(self.plasticity_n_samples)
             states = replay_batch_to_tensors(agent, fresh_batch)[0]
-            network = agent.approximator.model.network
+            network = _active_networks(agent)[-1]
             plasticity = measure_plasticity(
                 network,
                 states,
@@ -201,17 +224,20 @@ class DQNMetricsMonitor:
                 n_tasks=self.plasticity_n_tasks,
             )
             self.plasticity_steps.append(int(step))
+            self.plasticity_task_indices.append(int(task_index))
             self.plasticities.append(plasticity)
 
     def save(self, output_dir, seed):
         output_dir = Path(output_dir)
         arrays = {
             "monitoring-steps": self.steps,
+            "monitoring-task-indices": self.task_indices,
             "feature-rank": self.ranks,
             "feature-rank-ratio": self.rank_ratios,
             "feature-srank": self.sranks,
             "feature-srank-ratio": self.srank_ratios,
             "plasticity-steps": self.plasticity_steps,
+            "plasticity-task-indices": self.plasticity_task_indices,
             "plasticity": self.plasticities,
         }
         for name, values in arrays.items():

@@ -10,7 +10,7 @@ import torch.optim as optim
 import tyro
 import yaml
 
-from fqi.lunarlander.dqn import LunarLanderDQN
+from fqi.lunarlander.dqn import BoostedLunarLanderDQN, LunarLanderDQN
 from fqi.lunarlander.dqn_monitoring import DQNMetricsMonitor
 from fqi.lunarlander.env import LunarLander
 from fqi.network_fqi_lunarlander import DQNNetwork
@@ -26,6 +26,10 @@ torch.set_num_threads(1)
 
 @dataclass
 class Args:
+    use_curriculum: bool = False
+    """Train successively on increasing wind powers."""
+    use_boosting: bool = False
+    """Add one residual Q-network at each task."""
     seed: int = 95
     """Random seed of the experiment."""
     n_timesteps: int = 1_500_000
@@ -57,8 +61,8 @@ class Args:
     """LunarLander gravity."""
     enable_wind: bool = True
     """Whether wind is enabled."""
-    wind_power: float = 15.0
-    """Wind power of the target task."""
+    wind_powers: tuple[float, ...] = (0.0, 5.0, 10.0, 15.0)
+    """Curriculum tasks; the last value defines the target task."""
     turbulence_power: float = 1.5
     """Turbulence power of the target task."""
 
@@ -118,6 +122,38 @@ def rolling_mean(values, window):
     )
 
 
+def _split_budget(total, n_parts):
+    """Split an integer budget exactly and as evenly as possible."""
+    quotient, remainder = divmod(total, n_parts)
+    return [
+        quotient + (index < remainder)
+        for index in range(n_parts)
+    ]
+
+
+def _task_wind_powers(args):
+    if not args.wind_powers:
+        raise ValueError("wind_powers must contain at least one value")
+    if args.use_curriculum:
+        return list(args.wind_powers)
+    return [args.wind_powers[-1]] * len(args.wind_powers)
+
+
+def _validate_args(args, n_tasks):
+    if args.n_timesteps < n_tasks:
+        raise ValueError("n_timesteps must allow at least one step per task")
+    if args.n_eval_points < n_tasks:
+        raise ValueError("n_eval_points must allow one evaluation per task")
+    if not 0.0 <= args.exploration_fraction <= 1.0:
+        raise ValueError("exploration_fraction must be in [0, 1]")
+    if not 0.0 < args.exploration_final_eps <= 1.0:
+        raise ValueError("exploration_final_eps must be in (0, 1]")
+
+    shortest_task = min(_split_budget(args.n_timesteps, n_tasks))
+    if args.learning_starts >= shortest_task:
+        raise ValueError("learning_starts must be smaller than each task")
+
+
 def save_training_metrics(log_dir, seed, metrics, agent):
     reward_steps = np.arange(1, len(metrics.step_rewards) + 1)
     step_rewards = np.asarray(metrics.step_rewards)
@@ -162,13 +198,23 @@ def train_dqn(seed, log_dir, args):
     if args.use_cuda:
         torch.cuda.manual_seed_all(seed)
 
-    mdp = LunarLander(
-        gravity=args.gravity,
-        enable_wind=args.enable_wind,
-        wind_power=args.wind_power,
-        turbulence_power=args.turbulence_power,
-    )
-    mdp.seed(seed)
+    wind_powers = _task_wind_powers(args)
+    n_tasks = len(wind_powers)
+    _validate_args(args, n_tasks)
+    task_steps = _split_budget(args.n_timesteps, n_tasks)
+    task_evaluations = _split_budget(args.n_eval_points, n_tasks)
+
+    mdps = [
+        LunarLander(
+            gravity=args.gravity,
+            enable_wind=args.enable_wind and wind_power > 0.0,
+            wind_power=wind_power,
+            turbulence_power=args.turbulence_power,
+        )
+        for wind_power in wind_powers
+    ]
+    for task_index, mdp in enumerate(mdps):
+        mdp.seed(seed + task_index)
 
     optimizer = {
         "class": optim.Adam,
@@ -176,13 +222,18 @@ def train_dqn(seed, log_dir, args):
     }
     approximator_params = dict(
         network=DQNNetwork,
-        input_shape=mdp.info.observation_space.shape,
-        output_shape=(mdp.info.action_space.n,),
-        n_actions=mdp.info.action_space.n,
+        input_shape=mdps[0].info.observation_space.shape,
+        output_shape=(mdps[0].info.action_space.n,),
+        n_actions=mdps[0].info.action_space.n,
         loss=F.mse_loss,
         optimizer=optimizer,
         use_cuda=args.use_cuda,
     )
+    if args.use_boosting:
+        approximator_params.update(
+            n_models=n_tasks,
+            prediction="sum",
+        )
     algorithm_params = dict(
         batch_size=args.batch_size,
         target_update_frequency=args.target_update_interval,
@@ -190,20 +241,16 @@ def train_dqn(seed, log_dir, args):
         max_replay_size=args.buffer_size,
     )
 
-    steps_per_eval = args.n_timesteps // args.n_eval_points
-    if steps_per_eval < 1:
-        raise ValueError("n_timesteps must be at least n_eval_points")
-    n_explore = int(args.n_timesteps * args.exploration_fraction)
-    epsilon = LinearParameter(
-        value=1.0,
-        threshold_value=args.exploration_final_eps,
-        n=max(1, n_explore),
-    )
     test_epsilon = Parameter(value=0.0)
-    policy = EpsGreedy(epsilon)
+    policy = EpsGreedy(Parameter(value=1.0))
 
-    agent = LunarLanderDQN(
-        mdp.info,
+    agent_class = (
+        BoostedLunarLanderDQN
+        if args.use_boosting
+        else LunarLanderDQN
+    )
+    agent = agent_class(
+        mdps[0].info,
         policy,
         TorchApproximator,
         gradient_steps=args.gradient_steps,
@@ -211,8 +258,6 @@ def train_dqn(seed, log_dir, args):
         **algorithm_params,
     )
     metrics = TrainingMetrics()
-    training_core = Core(agent, mdp, callback_step=metrics)
-    evaluation_core = Core(agent, mdp)
     monitor = DQNMetricsMonitor(
         n_eval_points=args.n_eval_points,
         monitoring_batch_size=args.metric_monitoring_batch_size,
@@ -223,29 +268,81 @@ def train_dqn(seed, log_dir, args):
         learning_rate=args.learning_rate,
     )
     returns = []
+    evaluation_steps = []
+    evaluation_task_indices = []
+    task_boundaries = [0]
+    evaluation_index = 0
 
-    for evaluation_index in range(1, args.n_eval_points + 1):
-        policy.set_epsilon(epsilon)
-        metrics.start_block()
-        training_core.learn(
-            n_steps=steps_per_eval,
-            n_steps_per_fit=args.train_freq,
-            quiet=True,
-        )
-        monitor.monitor_evaluation(
-            agent,
-            step=len(metrics.step_rewards),
-            evaluation_index=evaluation_index,
-        )
+    try:
+        for task_index, (mdp, n_steps_task, n_evals_task) in enumerate(
+            zip(mdps, task_steps, task_evaluations)
+        ):
+            if args.use_boosting:
+                agent.set_curriculum_idx_and_reset(task_index)
+            else:
+                agent.reset_for_new_task()
+            monitor.start_task()
 
-        policy.set_epsilon(test_epsilon)
-        test_dataset = evaluation_core.evaluate(
-            n_episodes=args.n_test_episodes,
-            quiet=True,
-        )
-        returns.append(np.mean(compute_J(test_dataset, mdp.info.gamma)))
+            n_explore = max(
+                1, int(n_steps_task * args.exploration_fraction)
+            )
+            epsilon = LinearParameter(
+                value=1.0,
+                threshold_value=args.exploration_final_eps,
+                n=n_explore,
+            )
+            training_core = Core(agent, mdp, callback_step=metrics)
+            evaluation_core = Core(agent, mdp)
+
+            for n_steps_block in _split_budget(
+                n_steps_task, n_evals_task
+            ):
+                evaluation_index += 1
+                policy.set_epsilon(epsilon)
+                metrics.start_block()
+                training_core.learn(
+                    n_steps=n_steps_block,
+                    n_steps_per_fit=args.train_freq,
+                    quiet=True,
+                )
+                global_step = len(metrics.step_rewards)
+                monitor.monitor_evaluation(
+                    agent,
+                    step=global_step,
+                    evaluation_index=evaluation_index,
+                    task_index=task_index,
+                )
+
+                policy.set_epsilon(test_epsilon)
+                test_dataset = evaluation_core.evaluate(
+                    n_episodes=args.n_test_episodes,
+                    quiet=True,
+                )
+                returns.append(np.mean(compute_J(
+                    test_dataset, mdp.info.gamma
+                )))
+                evaluation_steps.append(global_step)
+                evaluation_task_indices.append(task_index)
+
+            task_boundaries.append(len(metrics.step_rewards))
+    finally:
+        for mdp in mdps:
+            mdp.stop()
 
     np.save(os.path.join(log_dir, "J-%d.npy" % seed), returns)
+    task_arrays = {
+        "evaluation_steps": evaluation_steps,
+        "evaluation_task_indices": evaluation_task_indices,
+        "task_boundaries": task_boundaries,
+        "task_wind_powers": wind_powers,
+        "task_timesteps": task_steps,
+        "task_evaluations": task_evaluations,
+    }
+    for name, values in task_arrays.items():
+        np.save(
+            os.path.join(log_dir, "%s-%d.npy" % (name, seed)),
+            np.asarray(values),
+        )
     save_training_metrics(log_dir, seed, metrics, agent)
     monitor.save(log_dir, seed)
     return returns
@@ -265,7 +362,9 @@ if __name__ == "__main__":
         args.output_dir, "config-%d.yaml" % args.seed
     )
     with open(config_path, "w") as stream:
-        yaml.dump(asdict(args), stream, default_flow_style=False,
-                  sort_keys=False)
+        yaml.safe_dump(
+            asdict(args), stream, default_flow_style=False,
+            sort_keys=False,
+        )
 
     print("J: ", returns)

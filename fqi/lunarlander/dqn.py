@@ -36,9 +36,18 @@ class LunarLanderDQN(DQN):
                     float(self.approximator.model.loss_fit)
                 )
 
+    def reset_for_new_task(self):
+        """Start a task with fresh replay while keeping learned weights."""
+        self._replay_memory.reset()
+        self._n_updates = 0
+
 
 class BoostedLunarLanderDQN(DQN):
-    """Boosted DQN using one residual Q-network per curriculum task."""
+    """DQN representing Q as a sum of one residual network per task.
+
+    At task i, only q_i is fitted. Its target is the Bellman target of
+    q_0 + ... + q_i minus the prediction of q_0 + ... + q_(i-1).
+    """
 
     def __init__(self, *args, gradient_steps=1, **kwargs):
         self._gradient_steps = gradient_steps
@@ -92,10 +101,20 @@ class BoostedLunarLanderDQN(DQN):
         )
 
     def set_curriculum_idx_and_reset(self, curriculum_idx):
+        """Activate one residual model and reset task-specific DQN state."""
         self._curriculum_idx = curriculum_idx
         self._fit_params["idx"] = curriculum_idx
         self._predict_params["idx"] = np.arange(curriculum_idx + 1)
         self.policy._predict_params["idx"] = np.arange(curriculum_idx + 1)
+        self._replay_memory.reset()
+        self._n_updates = 0
+
+        # Inactive target models were not synchronized by DQN.__init__.
+        # Synchronize all active residuals when starting a new task.
+        for idx in range(curriculum_idx + 1):
+            self.target_approximator[idx].set_weights(
+                self.approximator[idx].get_weights()
+            )
 
 
 class SingleBoostedLunarLanderDQN(DQN):

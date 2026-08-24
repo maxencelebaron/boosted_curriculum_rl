@@ -200,8 +200,9 @@ def experiment(
 
             agent.fit(dataset)
 
-            reg = agent.approximator.model[0].model[i if boosted else 0]
-            depth_task.append(reg.last_depths)
+            if not neural:
+                reg = agent.approximator.model[0].model[i if boosted else 0]
+                depth_task.append(reg.last_depths)
 
             if all_losses is not None:
                 regressor = agent.approximator.model[i if boosted else 0]

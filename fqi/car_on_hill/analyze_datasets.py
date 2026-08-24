@@ -96,8 +96,8 @@ def run_analysis(datasets, outdir, title="Car-on-Hill datasets"):
 if __name__ == '__main__':
     datasets = {}
     for m in [0.800, 1.000, 1.200]:
-        fname = 'data/dataset_%1.3f.pkl' % m
+        fname = 'data_online/curriculum/dataset_%1.3f.pkl' % m
         with open(fname, 'rb') as f:
             datasets[m] = pickle.load(f)
 
-    run_analysis(datasets, outdir='data', title="Car-on-Hill offline datasets (random policy)")
+    run_analysis(datasets, outdir='data_online/curriculum', title="Car-on-Hill offline datasets (random policy)")

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=neural_fqi_%a
+#SBATCH --job-name=tree_fqi_%a
 #SBATCH --partition=tau
 #SBATCH --time=1-00:00:00
 #SBATCH --cpus-per-task=4
@@ -17,4 +17,4 @@ declare -a ARGS=(
     "--data-dir data_online/none"
 )
 
-python run_online.py --n-exp 5 --n-jobs 1 ${ARGS[$SLURM_ARRAY_TASK_ID]}
+python run_online.py --n-exp 5 --n-jobs 1 --n-episodes 2000 ${ARGS[$SLURM_ARRAY_TASK_ID]}

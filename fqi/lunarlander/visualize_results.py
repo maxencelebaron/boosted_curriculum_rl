@@ -85,7 +85,10 @@ class FQIConfiguration:
 
 class FQIVisualizer:
     FOLDER_PATTERN = re.compile(
-        r"(?P<learner>.+)_"
+        # Keep the learner match non-greedy so that, for example,
+        # ``neural_no_boosted_curriculum`` is split at ``no_boosted``
+        # rather than being interpreted as learner ``neural_no``.
+        r"(?P<learner>.+?)_"
         r"(?P<boosting>no_boosted|boosted)_"
         r"(?P<curriculum>no_curriculum|curriculum)"
     )
@@ -239,6 +242,15 @@ class FQIVisualizer:
         )
 
     def plot_depths(self):
+        # Neural FQI runs do not produce tree-depth metrics (see run.py).
+        # Skip this plot quietly when none of this learner's configurations
+        # contains the metric, while retaining per-configuration warnings for
+        # genuinely incomplete ExtraTrees results.
+        if not any(
+            (self.logs_dir / configuration.folder / "depths.npy").exists()
+            for configuration in self.configurations
+        ):
+            return
         loaded = self._load_metric("depths.npy")
         if not loaded:
             return

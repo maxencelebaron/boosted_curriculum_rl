@@ -61,8 +61,9 @@ def add_episode_mean(ax, curves):
 
 
 def finish_figure(figure, ax, output_path, xlabel, ylabel, title,
-                  legend_columns=2):
-    ax.set(xlabel=xlabel, ylabel=ylabel, title=title)
+                  legend_columns=2, title_pad=6):
+    ax.set(xlabel=xlabel, ylabel=ylabel)
+    ax.set_title(title, pad=title_pad)
     ax.grid(alpha=0.3)
     ax.legend(
         ncol=legend_columns,
@@ -238,7 +239,8 @@ class FQIVisualizer:
             title = "LunarLander final-task performance"
 
         finish_figure(
-            figure, ax, output, xlabel, "Cumulative discounted return", title
+            figure, ax, output, xlabel, "Cumulative discounted return", title,
+            title_pad=28 if not final_task_only else 6,
         )
 
     def plot_depths(self):
@@ -289,6 +291,7 @@ class FQIVisualizer:
             figure, ax, self.current_output_dir / "lunarlander_depths.pdf",
             "FQI iteration", "Mean tree depth",
             "Evolution of ExtraTrees depth",
+            title_pad=28,
         )
 
     def run(self):

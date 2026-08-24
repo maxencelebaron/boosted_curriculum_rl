@@ -30,7 +30,7 @@ class Args:
     """Random seed of the experiment."""
     n_timesteps: int = 1_500_000
     """Total environment steps per experiment."""
-    n_eval_points: int = 300
+    n_eval_points: int = 200
     """Number of evaluation checkpoints."""
     n_test_episodes: int = 10
     """Number of episodes at each evaluation checkpoint."""

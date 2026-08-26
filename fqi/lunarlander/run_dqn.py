@@ -110,18 +110,6 @@ class TrainingMetrics:
             self._episode_length = 0
 
 
-def rolling_mean(values, window):
-    values = np.asarray(values, dtype=float)
-    if len(values) == 0:
-        return values
-    cumulative = np.cumsum(np.r_[0.0, values])
-    indices = np.arange(len(values))
-    starts = np.maximum(0, indices - window + 1)
-    return (cumulative[indices + 1] - cumulative[starts]) / (
-        indices - starts + 1
-    )
-
-
 def _split_budget(total, n_parts):
     """Split an integer budget exactly and as evenly as possible."""
     quotient, remainder = divmod(total, n_parts)
@@ -157,13 +145,10 @@ def _validate_args(args, n_tasks):
 def save_training_metrics(log_dir, seed, metrics, agent):
     reward_steps = np.arange(1, len(metrics.step_rewards) + 1)
     step_rewards = np.asarray(metrics.step_rewards)
-    smoothed_step_rewards = rolling_mean(step_rewards, 500)
 
     episode_indices = np.arange(1, len(metrics.episode_returns) + 1)
     episode_returns = np.asarray(metrics.episode_returns)
     episode_lengths = np.asarray(metrics.episode_lengths)
-    smoothed_episode_returns = rolling_mean(episode_returns, 50)
-    smoothed_episode_lengths = rolling_mean(episode_lengths, 50)
 
     gradient_loss_steps = np.asarray(agent.training_loss_steps)
     gradient_losses = np.asarray(agent.training_losses)
@@ -173,20 +158,15 @@ def save_training_metrics(log_dir, seed, metrics, agent):
     np.add.at(losses, inverse, gradient_losses)
     np.add.at(loss_counts, inverse, 1)
     losses /= loss_counts
-    smoothed_losses = rolling_mean(losses, 50)
 
     arrays = {
         "training_reward_steps": reward_steps,
         "training_rewards_raw": step_rewards,
-        "training_rewards": smoothed_step_rewards,
         "episode_indices": episode_indices,
         "episode_returns_raw": episode_returns,
-        "episode_returns": smoothed_episode_returns,
         "episode_lengths_raw": episode_lengths,
-        "episode_lengths": smoothed_episode_lengths,
         "loss_steps": loss_steps,
         "losses_raw": losses,
-        "losses": smoothed_losses,
     }
     for name, values in arrays.items():
         np.save(os.path.join(log_dir, "%s-%d.npy" % (name, seed)), values)

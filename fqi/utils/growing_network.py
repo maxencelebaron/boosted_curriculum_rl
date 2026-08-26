@@ -18,7 +18,10 @@ from gromo.utils.training_utils import (
 from .natural_gradient import KFAC, KFACConfig
 
 
-def feature_rank(features: np.ndarray, epsilon: float = 0.01):
+FEATURE_RANK_EPSILON = 0.01
+
+
+def feature_rank(features: np.ndarray, epsilon: float = FEATURE_RANK_EPSILON):
     """
     Number of singular values of (1/√n)·φ(X) above epsilon where φ(X) is
     the feature matrix.
@@ -103,14 +106,29 @@ def measure_plasticity(
     return float(np.mean(b_list) - np.mean(l_list))
 
 
-def principal_angle_cosines(phi: np.ndarray, phi_new: np.ndarray) -> np.ndarray:
+def principal_angle_cosines(
+    phi: np.ndarray,
+    phi_new: np.ndarray,
+    epsilon: float = FEATURE_RANK_EPSILON,
+) -> np.ndarray:
     """
     Cosines of principal angles between column spaces of phi and phi_new.
     Values near 1 = aligned (new neurons replicate existing features).
     Values near 0 = orthogonal (new neurons learn independent features).
     """
-    U, _, _ = np.linalg.svd(phi, full_matrices=False)
-    V, _, _ = np.linalg.svd(phi_new, full_matrices=False)
+    if epsilon <= 0:
+        raise ValueError("epsilon must be strictly positive")
+    scale = np.sqrt(phi.shape[0])
+    U, singular_values, _ = np.linalg.svd(
+        phi / scale, full_matrices=False
+    )
+    V, new_singular_values, _ = np.linalg.svd(
+        phi_new / scale, full_matrices=False
+    )
+    U = U[:, singular_values > epsilon]
+    V = V[:, new_singular_values > epsilon]
+    if U.shape[1] == 0 or V.shape[1] == 0:
+        return np.asarray([], dtype=float)
     return np.linalg.svd(U.T @ V, compute_uv=False)
 
 
@@ -207,6 +225,9 @@ def compute_metrics(
             phi_new, r_brc
         )
 
+        angle_min = float(cosines.min()) if cosines.size else float("nan")
+        angle_max = float(cosines.max()) if cosines.size else float("nan")
+        angle_mean = float(cosines.mean()) if cosines.size else float("nan")
         result.update({
             "rank_old": rank_old,
             "rank_new": rank_new,
@@ -216,9 +237,9 @@ def compute_metrics(
             "srank_new": sr_new,
             "srank_ratio_old": sr_old / phi.shape[1],
             "srank_ratio_new": sr_new / phi_new.shape[1],
-            "angles_min": float(cosines.min()),
-            "angles_max": float(cosines.max()),
-            "angles_mean": float(cosines.mean()),
+            "angles_min": angle_min,
+            "angles_max": angle_max,
+            "angles_mean": angle_mean,
             "brc": brc,
             "brc_normalized": brc_normalized,
         })
@@ -272,14 +293,22 @@ def pre_growth_optimize(
         )
     loss_history = []
     loss = None
-    for _ in range(n_steps):
+    for step_index in range(n_steps):
         optimizer.zero_grad()
         if use_natural_gradient:
             assert kfac is not None
-            old_val, loss, updates = kfac.compute_updates(
-                states, actions, td_targets
-            )
-            kfac.apply_updates_(updates, step_size=optimizer.param_groups[0]["lr"])
+            try:
+                old_val, loss, updates = kfac.compute_updates(
+                    states, actions, td_targets
+                )
+                kfac.apply_updates_(
+                    updates, step_size=optimizer.param_groups[0]["lr"]
+                )
+            except FloatingPointError as error:
+                raise FloatingPointError(
+                    f"K-FAC pre-growth iteration {step_index + 1}/"
+                    f"{n_steps}: {error}"
+                ) from error
         else:
             phi = network.encode(states)
             old_val = network.q_head(phi).gather(1, _actions).squeeze()

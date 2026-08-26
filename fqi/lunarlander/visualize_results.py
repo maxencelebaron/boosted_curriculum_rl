@@ -9,6 +9,7 @@ import argparse
 from dataclasses import dataclass
 import pathlib
 import re
+from typing import Optional
 import warnings
 import zlib
 
@@ -24,12 +25,34 @@ LOGS_DIR = BASE_DIR / "logs"
 FIGURES_DIR = BASE_DIR / "figures"
 MEAN_COLOR = "C3"
 
-plt.rcParams.update({"text.usetex": False, "font.family": "serif"})
+plt.rcParams.update({
+    "text.usetex": False,
+    "font.family": "serif",
+    "figure.facecolor": "white",
+    "savefig.facecolor": "white",
+    "axes.facecolor": "#ECEFF1",
+    "axes.edgecolor": "#AEB4BA",
+    "grid.color": "white",
+    "grid.linewidth": 0.8,
+})
 
 
 def flatten_tasks(data):
     """Flatten (seed, task, iteration) into (seed, global iteration)."""
     return data.reshape(data.shape[0], -1)
+
+
+def moving_average(values, window):
+    """Return a trailing moving average with a shorter initial window."""
+    values = np.asarray(values, dtype=float)
+    if len(values) == 0:
+        return values
+    cumulative = np.cumsum(np.r_[0.0, values])
+    indices = np.arange(len(values))
+    starts = np.maximum(0, indices - window + 1)
+    return (cumulative[indices + 1] - cumulative[starts]) / (
+        indices - starts + 1
+    )
 
 
 def add_mean_if_aligned(ax, curves):
@@ -65,7 +88,7 @@ def add_episode_mean(ax, curves):
 def finish_figure(figure, ax, output_path, xlabel, ylabel, title, legend_columns=2, title_pad=6):
     ax.set(xlabel=xlabel, ylabel=ylabel)
     ax.set_title(title, pad=title_pad)
-    ax.grid(alpha=0.3)
+    ax.grid(alpha=0.85)
     ax.legend(
         ncol=legend_columns,
         loc="upper left",
@@ -315,6 +338,8 @@ class DQNMetric:
     ylabel: str
     title: str
     mean_by_episode: bool = False
+    legacy_values: Optional[str] = None
+    smoothing_window: Optional[int] = None
 
 
 class DQNFileIndex:
@@ -374,50 +399,13 @@ class DQNVisualizer:
         "svd": "C2",
         "gromo_one_layer": "C4",
     }
+    DISPLAY_LABELS = {
+        "baseline": "Baseline",
+        "gromo_one_layer": "Tiny",
+        "svd": "ALS",
+    }
 
-    METRICS = (
-        DQNMetric(
-            "J",
-            "evaluation_steps",
-            "dqn_evaluation_returns.pdf",
-            "Environment steps",
-            "Cumulative discounted return",
-            "DQN evaluation performance",
-        ),
-        DQNMetric(
-            "training_rewards",
-            "training_reward_steps",
-            "dqn_training_rewards.pdf",
-            "Environment steps",
-            "Immediate reward",
-            "DQN training reward (rolling mean)",
-        ),
-        DQNMetric(
-            "episode_returns",
-            "episode_indices",
-            "dqn_episode_returns.pdf",
-            "Episode",
-            "Episode return",
-            "DQN episode return (rolling mean)",
-            mean_by_episode=True,
-        ),
-        DQNMetric(
-            "episode_lengths",
-            "episode_indices",
-            "dqn_episode_lengths.pdf",
-            "Episode",
-            "Episode length (steps)",
-            "DQN episode length (rolling mean)",
-            mean_by_episode=True,
-        ),
-        DQNMetric(
-            "losses",
-            "loss_steps",
-            "dqn_td_loss.pdf",
-            "Environment steps",
-            "TD loss (MSE)",
-            "DQN TD loss (rolling mean)",
-        ),
+    UNSMOOTHED_METRICS = (
         DQNMetric(
             "feature_rank",
             "monitoring_steps",
@@ -455,17 +443,18 @@ class DQNVisualizer:
         ),
     )
 
-    # Files produced for every seed by the current training scripts. Raw
-    # arrays are audited but deliberately not plotted.
+    # Files produced for every seed by the current training scripts. Only raw
+    # training series are stored; smoothing belongs to the visualizer.
     COMMON_FILES = {
-        "J", "evaluation_steps", "evaluation_task_indices",
-        "task_boundaries", "task_wind_powers", "task_timesteps",
-        "task_evaluations", "training_reward_steps",
-        "training_rewards_raw", "training_rewards", "episode_indices",
-        "episode_returns_raw", "episode_returns", "episode_lengths_raw",
-        "episode_lengths", "loss_steps", "losses_raw", "losses",
+        "J", "training_reward_steps",
+        "training_rewards_raw", "episode_indices", "episode_returns_raw",
+        "episode_lengths_raw", "loss_steps", "losses_raw",
         "monitoring_steps", "monitoring_task_indices", "feature_rank",
         "feature_rank_ratio", "feature_srank", "feature_srank_ratio",
+    }
+    TASK_METADATA_FILES = {
+        "evaluation_steps", "evaluation_task_indices", "task_boundaries",
+        "task_wind_powers", "task_timesteps", "task_evaluations",
     }
     PLASTICITY_FILES = {
         "plasticity_steps", "plasticity_task_indices", "plasticity",
@@ -474,13 +463,74 @@ class DQNVisualizer:
         "principal_angle_min": "Minimum principal-angle cosine",
         "principal_angle_max": "Maximum principal-angle cosine",
         "principal_angle_mean": "Mean principal-angle cosine",
-        "brc_normalized": "Normalized Bellman residual correlation",
+        "brc_normalized": "Normalized Bellman-residual alignment",
     }
     GENERATION_FILES = {
         "bounds", "growth_step", "steps", *GENERATION_METRICS,
     }
 
-    def __init__(self):
+    LEGACY_METRICS = {
+        "training_rewards_raw": "training_rewards",
+        "episode_returns_raw": "episode_returns",
+        "episode_lengths_raw": "episode_lengths",
+        "losses_raw": "losses",
+    }
+
+    def __init__(self, reward_window=500, episode_window=50, loss_window=50):
+        for name, value in {
+            "reward_window": reward_window,
+            "episode_window": episode_window,
+            "loss_window": loss_window,
+        }.items():
+            if value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        self.metrics = (
+            DQNMetric(
+                "J", "evaluation_steps", "dqn_evaluation_returns.pdf",
+                "Environment steps", "Cumulative discounted return",
+                "DQN evaluation performance",
+            ),
+            DQNMetric(
+                "training_rewards_raw", "training_reward_steps",
+                "dqn_training_rewards.pdf", "Environment steps",
+                "Immediate reward",
+                "Smoothed DQN training reward "
+                f"({reward_window}-step moving average)",
+                legacy_values="training_rewards",
+                smoothing_window=reward_window,
+            ),
+            DQNMetric(
+                "episode_returns_raw", "episode_indices",
+                "dqn_episode_returns.pdf", "Episode", "Episode return",
+                "Smoothed DQN episodic return "
+                f"({episode_window}-episode moving average)",
+                mean_by_episode=True,
+                legacy_values="episode_returns",
+                smoothing_window=episode_window,
+            ),
+            DQNMetric(
+                "episode_lengths_raw", "episode_indices",
+                "dqn_episode_lengths.pdf", "Episode",
+                "Episode length (steps)",
+                "Smoothed DQN episode length "
+                f"({episode_window}-episode moving average)",
+                mean_by_episode=True,
+                legacy_values="episode_lengths",
+                smoothing_window=episode_window,
+            ),
+            DQNMetric(
+                "losses_raw", "loss_steps", "dqn_td_loss.pdf",
+                "Environment steps", "TD loss (MSE)",
+                "Smoothed DQN TD loss "
+                f"({loss_window}-training-step moving average)",
+                legacy_values="losses",
+                smoothing_window=loss_window,
+            ),
+            *self.UNSMOOTHED_METRICS,
+        )
+        self._legacy_warnings = set()
+        self._legacy_metrics_used = set()
+        self._reconstructed_evaluation_steps = set()
         self.logs_dir = LOGS_DIR
         self.output_dir = FIGURES_DIR / "dqn"
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -545,7 +595,7 @@ class DQNVisualizer:
                 key = next(iter(configured_modes))
             else:
                 key = folder_key
-            label = "Baseline" if not is_growth else key.replace("_", "-")
+            label = self.DISPLAY_LABELS.get(key, key.replace("_", "-"))
             experiments.append(DQNExperiment(
                 directory=directory,
                 key=key,
@@ -581,12 +631,10 @@ class DQNVisualizer:
         if events is None:
             return None
         return tuple(
-            int(event.get("actual_step", event.get("scheduled_step")))
+            int(event["scheduled_step"])
             for event in events
             if isinstance(event, dict)
-            and not event.get("skipped", False)
-            and event.get("neurons_added", 1) > 0
-            and ("actual_step" in event or "scheduled_step" in event)
+            and "scheduled_step" in event
         )
 
     @classmethod
@@ -628,6 +676,11 @@ class DQNVisualizer:
             issues = []
             for seed in experiment.seeds:
                 expected = set(self.COMMON_FILES)
+                # Runs predating task metadata remain usable through a
+                # deterministic evaluation-axis reconstruction. Once an exact
+                # evaluation axis exists, all companion metadata is expected.
+                if seed in experiment.index.seeds("evaluation_steps"):
+                    expected.update(self.TASK_METADATA_FILES)
                 config = experiment.configs.get(seed)
                 if config is None:
                     issues.append(f"seed {seed}: missing config-{seed}.yaml")
@@ -638,6 +691,12 @@ class DQNVisualizer:
                 missing = sorted(
                     metric for metric in expected
                     if seed not in experiment.index.seeds(metric)
+                    and not (
+                        metric in self.LEGACY_METRICS
+                        and seed in experiment.index.seeds(
+                            self.LEGACY_METRICS[metric]
+                        )
+                    )
                 )
                 if missing:
                     issues.append(
@@ -682,11 +741,29 @@ class DQNVisualizer:
                     + "\n=================================================="
                 )
 
-    @staticmethod
-    def _validated_curve(experiment, metric, seed):
+    def _validated_curve(self, experiment, metric, seed):
+        values_name = metric.values
+        legacy = False
+        if seed not in experiment.index.seeds(values_name):
+            if (
+                metric.legacy_values is None
+                or seed not in experiment.index.seeds(metric.legacy_values)
+            ):
+                return None
+            values_name = metric.legacy_values
+            legacy = True
         try:
-            x = np.asarray(experiment.index.load(metric.x, seed))
-            values = np.asarray(experiment.index.load(metric.values, seed))
+            values = np.asarray(experiment.index.load(values_name, seed))
+            if seed in experiment.index.seeds(metric.x):
+                x = np.asarray(experiment.index.load(metric.x, seed))
+            elif metric.values == "J":
+                x = self._reconstruct_evaluation_steps(
+                    experiment, seed, len(values)
+                )
+                if x is None:
+                    return None
+            else:
+                return None
         except (OSError, ValueError) as error:
             warnings.warn(
                 f"WARNING: {experiment.label} seed {seed}, {metric.ylabel}: "
@@ -705,6 +782,18 @@ class DQNVisualizer:
                 "empty arrays; seed skipped"
             )
             return None
+        if metric.smoothing_window is not None and not legacy:
+            values = moving_average(values, metric.smoothing_window)
+        elif legacy:
+            warning_key = (experiment.key, seed, values_name)
+            if warning_key not in self._legacy_warnings:
+                warnings.warn(
+                    f"WARNING: {experiment.label} seed {seed}: using legacy "
+                    f"pre-smoothed metric '{values_name}'; requested window "
+                    "cannot be reapplied because the raw file is missing"
+                )
+                self._legacy_warnings.add(warning_key)
+            self._legacy_metrics_used.add(metric.values)
         finite = np.isfinite(x) & np.isfinite(values)
         if not finite.all():
             warnings.warn(
@@ -719,6 +808,53 @@ class DQNVisualizer:
             )
             return None
         return x, values
+
+    @staticmethod
+    def _split_budget(total, n_parts):
+        quotient, remainder = divmod(total, n_parts)
+        return np.asarray([
+            quotient + (index < remainder) for index in range(n_parts)
+        ])
+
+    def _reconstruct_evaluation_steps(self, experiment, seed, n_values):
+        config = experiment.configs.get(seed, {})
+        n_timesteps = config.get("n_timesteps")
+        n_evaluations = config.get("n_eval_points")
+        wind_powers = config.get("wind_powers") or []
+        if (
+            not isinstance(n_timesteps, int)
+            or not isinstance(n_evaluations, int)
+            or n_timesteps < 1
+            or n_evaluations != n_values
+        ):
+            warnings.warn(
+                f"WARNING: {experiment.label} seed {seed}: cannot "
+                "reconstruct evaluation_steps from config; seed skipped"
+            )
+            return None
+        n_tasks = len(wind_powers) if config.get("use_curriculum") else 1
+        n_tasks = max(1, n_tasks)
+        task_steps = self._split_budget(n_timesteps, n_tasks)
+        task_evaluations = self._split_budget(n_evaluations, n_tasks)
+        blocks = np.concatenate([
+            self._split_budget(int(steps), int(evaluations))
+            for steps, evaluations in zip(task_steps, task_evaluations)
+            if evaluations > 0
+        ])
+        if len(blocks) != n_values:
+            warnings.warn(
+                f"WARNING: {experiment.label} seed {seed}: reconstructed "
+                "evaluation axis has an inconsistent length; seed skipped"
+            )
+            return None
+        warning_key = (experiment.key, seed)
+        if warning_key not in self._reconstructed_evaluation_steps:
+            warnings.warn(
+                f"WARNING: {experiment.label} seed {seed}: "
+                "evaluation_steps reconstructed from the legacy config"
+            )
+            self._reconstructed_evaluation_steps.add(warning_key)
+        return np.cumsum(blocks)
 
     @staticmethod
     def _align_curves(curves, prefix_alignment):
@@ -756,7 +892,7 @@ class DQNVisualizer:
         ax.plot(x, upper, color=experiment.color, linewidth=0.55, alpha=0.5)
         ax.plot(
             x, mean, color=experiment.color, linewidth=2,
-            label=f"{experiment.label} ({len(values)} seeds)",
+            label=experiment.label,
         )
 
     def _add_shared_growth_markers(self, ax):
@@ -767,7 +903,8 @@ class DQNVisualizer:
             )
 
     def plot_metric(self, metric):
-        figure, ax = plt.subplots(figsize=(8, 4.5))
+        self._legacy_metrics_used.discard(metric.values)
+        figure, ax = plt.subplots(figsize=(10, 4.5))
         plotted = False
         applicable = False
         for experiment in self.experiments:
@@ -777,10 +914,15 @@ class DQNVisualizer:
             ):
                 continue
             applicable = True
-            complete_seeds = sorted(
-                experiment.index.seeds(metric.values)
-                & experiment.index.seeds(metric.x)
-            )
+            value_seeds = experiment.index.seeds(metric.values)
+            if metric.legacy_values is not None:
+                value_seeds |= experiment.index.seeds(metric.legacy_values)
+            if metric.values == "J":
+                complete_seeds = sorted(value_seeds)
+            else:
+                complete_seeds = sorted(
+                    value_seeds & experiment.index.seeds(metric.x)
+                )
             curves = []
             for seed in complete_seeds:
                 curve = self._validated_curve(experiment, metric, seed)
@@ -807,9 +949,13 @@ class DQNVisualizer:
             )
             return
         self._add_shared_growth_markers(ax)
+        title = metric.title
+        if metric.values in self._legacy_metrics_used:
+            title = re.sub(r" \([^()]+ moving average\)$", "", title)
+            title += " (legacy smoothing window unavailable)"
         finish_figure(
             figure, ax, self.output_dir / metric.filename,
-            metric.xlabel, metric.ylabel, metric.title,
+            metric.xlabel, metric.ylabel, title, legend_columns=1,
         )
 
     def _generation_indices(self, experiment):
@@ -830,7 +976,7 @@ class DQNVisualizer:
         generation_colors = plt.get_cmap("viridis")
         denominator = max(1, len(generations) - 1)
         for metric_suffix, ylabel in self.GENERATION_METRICS.items():
-            figure, ax = plt.subplots(figsize=(8, 4.5))
+            figure, ax = plt.subplots(figsize=(10, 4.5))
             plotted = False
             for position, generation in enumerate(generations):
                 metric = DQNMetric(
@@ -866,7 +1012,7 @@ class DQNVisualizer:
                 )
                 ax.plot(
                     x, mean, color=color, linewidth=1.7,
-                    label=f"Generation {generation + 1}",
+                    label=f"Cohort {generation + 1}",
                 )
                 plotted = True
             if not plotted:
@@ -881,17 +1027,144 @@ class DQNVisualizer:
                 figure, ax, method_dir / f"dqn_{metric_suffix}.pdf",
                 "Environment steps", ylabel,
                 f"{experiment.label}: {ylabel}",
+                legend_columns=1,
             )
+
+    def plot_architecture_evolution(self):
+        width_figure, width_ax = plt.subplots(figsize=(10, 4.5))
+        neurons_figure, neurons_ax = plt.subplots(figsize=(10, 4.5))
+        width_plotted = False
+        neurons_plotted = False
+        skipped_plotted = False
+        zero_plotted = False
+
+        for experiment in self.experiments:
+            if not experiment.is_growth:
+                continue
+            seed_events = []
+            for seed in experiment.seeds:
+                events = self._growth_events_for_seed(experiment, seed)
+                if events is not None:
+                    valid = [
+                        event for event in events
+                        if isinstance(event, dict)
+                        and "scheduled_step" in event
+                        and "hidden_before" in event
+                        and "hidden_after" in event
+                    ]
+                    if valid:
+                        seed_events.append(valid)
+            if not seed_events:
+                continue
+
+            common_steps = set(
+                int(event["scheduled_step"]) for event in seed_events[0]
+            )
+            for events in seed_events[1:]:
+                common_steps &= {
+                    int(event["scheduled_step"]) for event in events
+                }
+            common_steps = sorted(common_steps)
+            if not common_steps:
+                warnings.warn(
+                    f"WARNING: {experiment.label}: no common architecture "
+                    "events across seeds; diagnostics skipped"
+                )
+                continue
+
+            event_maps = [{
+                int(event["scheduled_step"]): event for event in events
+            } for events in seed_events]
+            initial_widths = np.asarray([
+                event_maps[index][common_steps[0]]["hidden_before"]
+                for index in range(len(event_maps))
+            ], dtype=float)
+            widths = np.asarray([
+                [event_map[step]["hidden_after"] for step in common_steps]
+                for event_map in event_maps
+            ], dtype=float)
+            width_values = np.column_stack((initial_widths, widths))
+            width_x = np.asarray([0, *common_steps])
+            width_mean = width_values.mean(axis=0)
+            width_std = width_values.std(axis=0)
+            width_ax.fill_between(
+                width_x, width_mean - width_std, width_mean + width_std,
+                step="post", color=experiment.color, alpha=0.15,
+                linewidth=0,
+            )
+            width_ax.step(
+                width_x, width_mean, where="post", color=experiment.color,
+                linewidth=2, label=experiment.label,
+            )
+            width_plotted = True
+
+            added = np.asarray([
+                [event_map[step].get("neurons_added", 0)
+                 for step in common_steps]
+                for event_map in event_maps
+            ], dtype=float)
+            added_mean, added_std = added.mean(axis=0), added.std(axis=0)
+            neurons_ax.fill_between(
+                common_steps, added_mean - added_std,
+                added_mean + added_std, color=experiment.color,
+                alpha=0.15, linewidth=0,
+            )
+            neurons_ax.plot(
+                common_steps, added_mean, color=experiment.color,
+                linewidth=2, marker="o", markersize=4,
+                label=experiment.label,
+            )
+            neurons_plotted = True
+
+            for step_index, step in enumerate(common_steps):
+                events = [event_map[step] for event_map in event_maps]
+                if any(event.get("skipped", False) for event in events):
+                    neurons_ax.scatter(
+                        step, 0, marker="x", s=55, linewidths=1.5,
+                        color=experiment.color, zorder=4,
+                        label="Skipped event" if not skipped_plotted else None,
+                    )
+                    skipped_plotted = True
+                elif added_mean[step_index] == 0:
+                    neurons_ax.scatter(
+                        step, 0, marker="o", s=42, facecolors="none",
+                        edgecolors=experiment.color, linewidths=1.2, zorder=4,
+                        label=(
+                            "Executed, zero neurons"
+                            if not zero_plotted else None
+                        ),
+                    )
+                    zero_plotted = True
+
+        if width_plotted:
+            finish_figure(
+                width_figure, width_ax,
+                self.output_dir / "dqn_network_width.pdf",
+                "Scheduled environment step", "Hidden-layer width",
+                "DQN architecture evolution", legend_columns=1,
+            )
+        else:
+            plt.close(width_figure)
+        if neurons_plotted:
+            finish_figure(
+                neurons_figure, neurons_ax,
+                self.output_dir / "dqn_neurons_added.pdf",
+                "Scheduled environment step", "Neurons added",
+                "DQN growth decisions", legend_columns=1,
+            )
+        else:
+            plt.close(neurons_figure)
 
     def run(self):
         print("Detected DQN experiments:")
         for experiment in self.experiments:
             print(f"  {experiment.label}: seeds {experiment.seeds}")
-        for metric in self.METRICS:
+        for metric in self.metrics:
             self.plot_metric(metric)
         for experiment in self.experiments:
             if experiment.is_growth:
                 self.plot_generation_metrics(experiment)
+        self.plot_architecture_evolution()
 
 
 def parse_args():
@@ -900,12 +1173,27 @@ def parse_args():
         "algorithm", choices=("fqi", "dqn"),
         help="Type of experiment to visualize",
     )
+    parser.add_argument(
+        "--reward-window", type=int, default=500,
+        help="Moving-average window for per-step training rewards",
+    )
+    parser.add_argument(
+        "--episode-window", type=int, default=50,
+        help="Moving-average window for episodic returns and lengths",
+    )
+    parser.add_argument(
+        "--loss-window", type=int, default=50,
+        help="Moving-average window for per-training-step TD losses",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    visualizer = FQIVisualizer() if args.algorithm == "fqi" \
-        else DQNVisualizer()
+    visualizer = FQIVisualizer() if args.algorithm == "fqi" else DQNVisualizer(
+        reward_window=args.reward_window,
+        episode_window=args.episode_window,
+        loss_window=args.loss_window,
+    )
     visualizer.run()
     print(f"Saved figures to {visualizer.output_dir}")

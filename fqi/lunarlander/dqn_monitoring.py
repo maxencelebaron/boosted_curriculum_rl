@@ -178,10 +178,13 @@ class DQNMetricsMonitor:
         if phi_old.shape[1] == 0 or phi_new.shape[1] == 0:
             return
         cosines = principal_angle_cosines(phi_old, phi_new)
+        angle_min = float(cosines.min()) if cosines.size else float("nan")
+        angle_max = float(cosines.max()) if cosines.size else float("nan")
+        angle_mean = float(cosines.mean()) if cosines.size else float("nan")
         generation["steps"].append(int(step))
-        generation["angle_min"].append(float(cosines.min()))
-        generation["angle_max"].append(float(cosines.max()))
-        generation["angle_mean"].append(float(cosines.mean()))
+        generation["angle_min"].append(angle_min)
+        generation["angle_max"].append(angle_max)
+        generation["angle_mean"].append(angle_mean)
         generation["brc_normalized"].append(
             normalized_bellman_residual_correlation(
                 phi_new, residual, epsilon=1e-12

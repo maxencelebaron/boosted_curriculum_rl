@@ -107,6 +107,10 @@ class Args:
     natural_gradient_damping: float = 1e-5
     natural_gradient_noise_variance: float = 1.0
     natural_gradient_eigenvalue_threshold: float = 1e-7
+    kfac_retry_damping_multiplier: float = 10.0
+    """Damping multiplier for the single non-finite K-FAC retry."""
+    kfac_retry_step_size_multiplier: float = 0.1
+    """Step-size multiplier for the single non-finite K-FAC retry."""
 
     numerical_threshold: float = 1e-6
     """Threshold to consider an eigenvalue as zero in the SVD"""
@@ -189,6 +193,12 @@ def _validate_args(args: Args, task_steps: list[int]):
         raise ValueError("grow_batch_size must be positive")
     if not 0.0 < args.exploration_final_eps <= 1.0:
         raise ValueError("exploration_final_eps must be in (0, 1]")
+    if args.kfac_retry_damping_multiplier <= 1.0:
+        raise ValueError("kfac_retry_damping_multiplier must be greater than 1")
+    if not 0.0 < args.kfac_retry_step_size_multiplier < 1.0:
+        raise ValueError(
+            "kfac_retry_step_size_multiplier must be between 0 and 1"
+        )
 
     expected_events = (
         2 * len(task_steps) - 1
@@ -229,21 +239,16 @@ def _reset_adam(torch_approximator, learning_rate):
 
 
 def _save_growth_results(log_dir, seed, controller: GrowthController):
-    with open(
-        os.path.join(log_dir, f"growth-events-{seed}.yaml"),
-        "w",
-        encoding="utf-8",
-    ) as stream:
-        yaml.safe_dump(controller.events, stream, sort_keys=False)
-
+    controller.save_events()
     controller.metrics_monitor.save(log_dir, seed)
 
 
 class GrowthController:
     """Grow from a batch sampled from DQN replay."""
 
-    def __init__(self, args: Args, task_steps: list[int]):
+    def __init__(self, args: Args, task_steps: list[int], log_dir: Path):
         self.args = args
+        self.events_path = log_dir / f"growth-events-{args.seed}.yaml"
         self.module = importlib.import_module(GROWTH_MODULES[args.growth_mode])
         self.steps = _growth_schedule(args, task_steps)
         self.target_widths = np.rint(np.linspace(
@@ -265,6 +270,17 @@ class GrowthController:
             learning_rate=args.learning_rate,
         )
 
+    def save_events(self):
+        """Atomically persist completed growth decisions."""
+        temporary_path = self.events_path.with_suffix(".yaml.tmp")
+        with temporary_path.open("w", encoding="utf-8") as stream:
+            yaml.safe_dump(self.events, stream, sort_keys=False)
+        temporary_path.replace(self.events_path)
+
+    def _record_event(self, event):
+        self.events.append(event)
+        self.save_events()
+
     def record_environment_step(self):
         self.training_environment_steps += 1
 
@@ -284,6 +300,74 @@ class GrowthController:
             )
             self.next_event += 1
 
+    @staticmethod
+    def _restore_pre_growth_state(network, optimizer, network_state,
+                                  optimizer_state):
+        network.load_state_dict(network_state)
+        optimizer.load_state_dict(optimizer_state)
+        network.zero_grad(set_to_none=True)
+
+    def _pre_growth_with_retry(self, online, network, states, actions,
+                               td_targets):
+        network_state = copy.deepcopy(network.state_dict())
+        optimizer_state = copy.deepcopy(online._optimizer.state_dict())
+
+        def optimize(damping):
+            return pre_growth_optimize(
+                network=network,
+                states=states,
+                actions=actions,
+                td_targets=td_targets,
+                optimizer=online._optimizer,
+                n_steps=self.args.pre_growth_steps,
+                use_natural_gradient=self.args.use_natural_gradient,
+                natural_gradient_damping=damping,
+                natural_gradient_noise_variance=(
+                    self.args.natural_gradient_noise_variance
+                ),
+                natural_gradient_eigenvalue_threshold=(
+                    self.args.natural_gradient_eigenvalue_threshold
+                ),
+            )
+
+        try:
+            _, final_loss, losses = optimize(
+                self.args.natural_gradient_damping
+            )
+            return final_loss, losses, False, []
+        except FloatingPointError as first_error:
+            self._restore_pre_growth_state(
+                network, online._optimizer, network_state, optimizer_state
+            )
+            original_step_size = online._optimizer.param_groups[0]["lr"]
+            retry_damping = max(
+                self.args.natural_gradient_damping
+                * self.args.kfac_retry_damping_multiplier,
+                self.args.natural_gradient_eigenvalue_threshold * 10,
+            )
+            retry_step_size = (
+                original_step_size
+                * self.args.kfac_retry_step_size_multiplier
+            )
+            online._optimizer.param_groups[0]["lr"] = retry_step_size
+            print(
+                "WARNING: non-finite K-FAC pre-growth update; retrying "
+                f"event {self.next_event} with damping={retry_damping:g} "
+                f"and step_size={retry_step_size:g}. Error: {first_error}"
+            )
+            try:
+                _, final_loss, losses = optimize(retry_damping)
+                online._optimizer.param_groups[0]["lr"] = original_step_size
+                return final_loss, losses, True, [str(first_error)]
+            except FloatingPointError as retry_error:
+                self._restore_pre_growth_state(
+                    network, online._optimizer, network_state,
+                    optimizer_state,
+                )
+                return None, [], True, [
+                    str(first_error), str(retry_error)
+                ]
+
     def _grow(self, agent, scheduled_step, target_width):
         online = agent.approximator.model
         network = online.network
@@ -293,27 +377,17 @@ class GrowthController:
             agent, agent._replay_memory.get(self.args.grow_batch_size)
         )
         pre_growth_losses = []
+        pre_growth_retry_used = False
 
         if self.args.pre_growth_steps:
-            _, final_loss, pre_growth_losses = pre_growth_optimize(
-                network=network,
-                states=states,
-                actions=actions,
-                td_targets=td_targets,
-                optimizer=online._optimizer,
-                n_steps=self.args.pre_growth_steps,
-                use_natural_gradient=self.args.use_natural_gradient,
-                natural_gradient_damping=self.args.natural_gradient_damping,
-                natural_gradient_noise_variance=(
-                    self.args.natural_gradient_noise_variance
-                ),
-                natural_gradient_eigenvalue_threshold=(
-                    self.args.natural_gradient_eigenvalue_threshold
-                ),
+            final_loss, pre_growth_losses, pre_growth_retry_used, errors = (
+                self._pre_growth_with_retry(
+                    online, network, states, actions, td_targets
+                )
             )
-            if final_loss < self.args.bellman_residual_threshold:
+            if final_loss is None:
                 _reset_adam(online, self.args.learning_rate)
-                self.events.append({
+                self._record_event({
                     "task_index": self.current_task_index,
                     "scheduled_step": int(scheduled_step),
                     "actual_step": int(self.training_environment_steps),
@@ -321,6 +395,29 @@ class GrowthController:
                     "hidden_after": int(hidden_before),
                     "neurons_added": 0,
                     "skipped": True,
+                    "skip_reason": "nonfinite_kfac_after_retry",
+                    "pre_growth_retry_used": True,
+                    "pre_growth_errors": errors,
+                    "pre_growth_losses": [],
+                })
+                print(
+                    "WARNING: growth event "
+                    f"{self.next_event} at step {scheduled_step} skipped "
+                    "after two non-finite K-FAC attempts"
+                )
+                return
+            if final_loss < self.args.bellman_residual_threshold:
+                _reset_adam(online, self.args.learning_rate)
+                self._record_event({
+                    "task_index": self.current_task_index,
+                    "scheduled_step": int(scheduled_step),
+                    "actual_step": int(self.training_environment_steps),
+                    "hidden_before": int(hidden_before),
+                    "hidden_after": int(hidden_before),
+                    "neurons_added": 0,
+                    "skipped": True,
+                    "skip_reason": "bellman_residual_below_threshold",
+                    "pre_growth_retry_used": pre_growth_retry_used,
                     "pre_growth_losses": [float(x) for x in pre_growth_losses],
                 })
                 return
@@ -363,7 +460,7 @@ class GrowthController:
         _reset_adam(target, self.args.learning_rate)
 
         hidden_after = online.network.encoder_size
-        self.events.append({
+        self._record_event({
             "task_index": self.current_task_index,
             "scheduled_step": int(scheduled_step),
             "actual_step": int(self.training_environment_steps),
@@ -371,6 +468,7 @@ class GrowthController:
             "hidden_after": int(hidden_after),
             "neurons_added": int(hidden_after - hidden_before),
             "skipped": False,
+            "pre_growth_retry_used": pre_growth_retry_used,
             "pre_growth_losses": [float(x) for x in pre_growth_losses],
             "singular_values": [float(x) for x in singular_values],
         })
@@ -438,7 +536,7 @@ def experiment(args: Args):
     ]
     for task_index, mdp in enumerate(mdps):
         mdp.seed(args.seed + task_index)
-    controller = GrowthController(args, task_steps)
+    controller = GrowthController(args, task_steps, log_dir)
 
     optimizer = {
         "class": optim.Adam,

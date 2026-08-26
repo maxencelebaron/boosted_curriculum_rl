@@ -185,6 +185,16 @@ def compute_kfac_updates(
     layers = trainable_linear_layers(network) if layers is None else list(layers)
     if not layers:
         raise ValueError("K-FAC requires at least one trainable linear layer.")
+    if check_finite:
+        for name, tensor in (("states", states), ("targets", targets)):
+            if not torch.isfinite(tensor).all():
+                raise FloatingPointError(
+                    f"K-FAC input '{name}' contains NaN or Inf values."
+                )
+    layer_names = {
+        layer: name for name, layer in network.named_modules()
+        if isinstance(layer, nn.Linear)
+    }
 
     inputs, outputs, handles = register_linear_hooks(layers)
     try:
@@ -195,12 +205,18 @@ def compute_kfac_updates(
     if not layers:
         raise RuntimeError("No trainable linear layer participated in the forward pass.")
     predictions = q_values.gather(1, actions.reshape(-1, 1)).squeeze(1)
+    if check_finite and not torch.isfinite(predictions).all():
+        raise FloatingPointError(
+            "K-FAC selected predictions contain NaN or Inf values."
+        )
     sensitivities = output_sensitivities(
         predictions, [outputs[layer] for layer in layers]
     )
     loss = torch.nn.functional.mse_loss(
         predictions, targets.reshape(-1)
     ) / (2 * noise_variance)
+    if check_finite and not torch.isfinite(loss):
+        raise FloatingPointError("The K-FAC training loss is NaN or Inf.")
     network.zero_grad(set_to_none=True)
     loss.backward()
 
@@ -225,7 +241,13 @@ def compute_kfac_updates(
                 dim=1,
             )
         if check_finite and not torch.isfinite(gradient).all():
-            raise FloatingPointError("A K-FAC training gradient contains NaN or Inf values.")
+            layer_name = layer_names.get(layer, "<unnamed linear layer>")
+            nan_count = int(torch.isnan(gradient).sum().item())
+            inf_count = int(torch.isinf(gradient).sum().item())
+            raise FloatingPointError(
+                f"K-FAC gradient for layer '{layer_name}' contains "
+                f"{nan_count} NaN and {inf_count} Inf values."
+            )
         # compute_updates returns a descent direction, hence the leading minus.
         update = -precondition_kfac_matrix(
             gradient,
@@ -234,6 +256,12 @@ def compute_kfac_updates(
             damping=damping,
             eigenvalue_threshold=eigenvalue_threshold,
         )
+        if check_finite and not torch.isfinite(update).all():
+            layer_name = layer_names.get(layer, "<unnamed linear layer>")
+            raise FloatingPointError(
+                f"K-FAC update for layer '{layer_name}' contains NaN or Inf "
+                "values."
+            )
         weight_columns = layer.weight.shape[1]
         updates[layer.weight] = update[:, :weight_columns]
         if layer.bias is not None:
@@ -311,3 +339,9 @@ class KFAC:
     ) -> None:
         """Apply directions returned by :meth:`compute_updates`."""
         apply_kfac_updates_(updates, step_size=step_size)
+        if self.config.check_finite:
+            for name, parameter in self.network.named_parameters():
+                if not torch.isfinite(parameter).all():
+                    raise FloatingPointError(
+                        f"K-FAC produced a non-finite parameter '{name}'."
+                    )

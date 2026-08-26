@@ -24,13 +24,14 @@ BASE_DIR = pathlib.Path(__file__).resolve().parent
 LOGS_DIR = BASE_DIR / "logs"
 FIGURES_DIR = BASE_DIR / "figures"
 MEAN_COLOR = "C3"
+AXES_BACKGROUND = "#E2E2E2"
 
 plt.rcParams.update({
     "text.usetex": False,
     "font.family": "serif",
     "figure.facecolor": "white",
     "savefig.facecolor": "white",
-    "axes.facecolor": "#ECEFF1",
+    "axes.facecolor": AXES_BACKGROUND,
     "axes.edgecolor": "#AEB4BA",
     "grid.color": "white",
     "grid.linewidth": 0.8,
@@ -86,6 +87,7 @@ def add_episode_mean(ax, curves):
 
 
 def finish_figure(figure, ax, output_path, xlabel, ylabel, title, legend_columns=2, title_pad=6):
+    ax.set_facecolor(AXES_BACKGROUND)
     ax.set(xlabel=xlabel, ylabel=ylabel)
     ax.set_title(title, pad=title_pad)
     ax.grid(alpha=0.85)
@@ -531,6 +533,7 @@ class DQNVisualizer:
         self._legacy_warnings = set()
         self._legacy_metrics_used = set()
         self._reconstructed_evaluation_steps = set()
+        self._reconstruction_warnings_emitted = set()
         self.logs_dir = LOGS_DIR
         self.output_dir = FIGURES_DIR / "dqn"
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -847,13 +850,7 @@ class DQNVisualizer:
                 "evaluation axis has an inconsistent length; seed skipped"
             )
             return None
-        warning_key = (experiment.key, seed)
-        if warning_key not in self._reconstructed_evaluation_steps:
-            warnings.warn(
-                f"WARNING: {experiment.label} seed {seed}: "
-                "evaluation_steps reconstructed from the legacy config"
-            )
-            self._reconstructed_evaluation_steps.add(warning_key)
+        self._reconstructed_evaluation_steps.add((experiment.key, seed))
         return np.cumsum(blocks)
 
     @staticmethod
@@ -928,6 +925,25 @@ class DQNVisualizer:
                 curve = self._validated_curve(experiment, metric, seed)
                 if curve is not None:
                     curves.append(curve)
+            if (
+                metric.values == "J"
+                and experiment.key
+                not in self._reconstruction_warnings_emitted
+            ):
+                reconstructed_seeds = sorted(
+                    seed for key, seed
+                    in self._reconstructed_evaluation_steps
+                    if key == experiment.key
+                )
+                if reconstructed_seeds:
+                    warnings.warn(
+                        f"WARNING: {experiment.label}: evaluation_steps "
+                        "reconstructed from legacy configs for seeds "
+                        f"{reconstructed_seeds}"
+                    )
+                    self._reconstruction_warnings_emitted.add(
+                        experiment.key
+                    )
             if not curves:
                 continue
             aligned = self._align_curves(curves, metric.mean_by_episode)
@@ -948,7 +964,8 @@ class DQNVisualizer:
                 f"WARNING: NO VALID DATA FOR {metric.ylabel}; plot skipped"
             )
             return
-        self._add_shared_growth_markers(ax)
+        if metric.xlabel == "Environment steps":
+            self._add_shared_growth_markers(ax)
         title = metric.title
         if metric.values in self._legacy_metrics_used:
             title = re.sub(r" \([^()]+ moving average\)$", "", title)
@@ -1093,6 +1110,14 @@ class DQNVisualizer:
                 linewidth=0,
             )
             width_ax.step(
+                width_x, width_mean - width_std, where="post",
+                color=experiment.color, linewidth=0.55, alpha=0.5,
+            )
+            width_ax.step(
+                width_x, width_mean + width_std, where="post",
+                color=experiment.color, linewidth=0.55, alpha=0.5,
+            )
+            width_ax.step(
                 width_x, width_mean, where="post", color=experiment.color,
                 linewidth=2, label=experiment.label,
             )
@@ -1108,6 +1133,14 @@ class DQNVisualizer:
                 common_steps, added_mean - added_std,
                 added_mean + added_std, color=experiment.color,
                 alpha=0.15, linewidth=0,
+            )
+            neurons_ax.plot(
+                common_steps, added_mean - added_std,
+                color=experiment.color, linewidth=0.55, alpha=0.5,
+            )
+            neurons_ax.plot(
+                common_steps, added_mean + added_std,
+                color=experiment.color, linewidth=0.55, alpha=0.5,
             )
             neurons_ax.plot(
                 common_steps, added_mean, color=experiment.color,

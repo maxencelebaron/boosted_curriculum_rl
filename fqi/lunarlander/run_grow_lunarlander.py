@@ -21,7 +21,11 @@ from fqi.lunarlander.dqn_monitoring import (
     replay_batch_to_tensors,
 )
 from fqi.lunarlander.env import LunarLander
-from fqi.lunarlander.run_dqn import TrainingMetrics, save_training_metrics
+from fqi.lunarlander.run_dqn import (
+    TrainingMetrics,
+    _split_budget,
+    save_training_metrics,
+)
 
 from mushroom_rl.approximators.parametric import TorchApproximator
 from mushroom_rl.core import Core
@@ -45,6 +49,8 @@ GROWTH_MODULES = {
 
 @dataclass
 class Args:
+    use_curriculum: bool = False
+    """Train successively on increasing wind powers."""
     seed: int = 95
     """Random seed of the experiment."""
     n_timesteps: int = 1_500_000
@@ -74,7 +80,8 @@ class Args:
 
     gravity: float = -10.0
     enable_wind: bool = True
-    wind_power: float = 15.0
+    wind_powers: tuple[float, ...] = (0.0, 5.0, 10.0, 15.0)
+    """Curriculum tasks; the last value defines the target task."""
     turbulence_power: float = 1.5
     use_cuda: bool = True
 
@@ -85,11 +92,11 @@ class Args:
     final_hidden: int = 64
     """Requested width after the final growth event."""
     n_growth_events: int = 8
-    """Number of growth events."""
+    """Number of growth events when curriculum is disabled."""
     growth_start_step: int = 0
-    """First growth step; zero selects n_timesteps/(n_events+1)."""
+    """First growth step without curriculum; zero selects it automatically."""
     growth_end_step: int = 0
-    """Last growth step; zero selects n_timesteps*n_events/(n_events+1)."""
+    """Last growth step without curriculum; zero selects it automatically."""
     pre_growth_steps: int = 10
     """Optimization steps on the fixed growth batch before growing."""
     grow_batch_size: int = 256
@@ -122,7 +129,25 @@ class Args:
     """Directory in which metrics are saved."""
 
 
-def _growth_schedule(args: Args) -> list[int]:
+def _task_wind_powers(args: Args) -> list[float]:
+    if not args.wind_powers:
+        raise ValueError("wind_powers must contain at least one value")
+    if args.use_curriculum:
+        return list(args.wind_powers)
+    return [args.wind_powers[-1]]
+
+
+def _growth_schedule(args: Args, task_steps: list[int]) -> list[int]:
+    if args.use_curriculum:
+        steps = []
+        task_start = 0
+        for task_index, n_steps_task in enumerate(task_steps):
+            if task_index > 0:
+                steps.append(task_start)
+            steps.append(task_start + n_steps_task // 2)
+            task_start += n_steps_task
+        return steps
+
     if args.n_growth_events == 0:
         return []
     start = args.growth_start_step or (
@@ -139,7 +164,7 @@ def _growth_schedule(args: Args) -> list[int]:
     ))
 
 
-def _validate_args(args: Args):
+def _validate_args(args: Args, task_steps: list[int]):
     if args.growth_mode not in GROWTH_MODULES:
         raise ValueError(
             f"Unknown growth_mode {args.growth_mode!r}; "
@@ -147,9 +172,16 @@ def _validate_args(args: Args):
         )
     if args.n_timesteps < args.n_eval_points or args.n_eval_points < 1:
         raise ValueError("n_timesteps must be at least n_eval_points >= 1")
+    if args.n_eval_points < len(task_steps):
+        raise ValueError("n_eval_points must allow one evaluation per task")
+    if min(task_steps) <= args.learning_starts:
+        raise ValueError("learning_starts must be smaller than each task")
+    if not 0.0 <= args.exploration_fraction <= 1.0:
+        raise ValueError("exploration_fraction must be in [0, 1]")
     if args.n_growth_events < 0:
         raise ValueError("n_growth_events must be non-negative")
-    if args.n_growth_events > 0 and args.final_hidden <= args.initial_hidden:
+    schedule = _growth_schedule(args, task_steps)
+    if schedule and args.final_hidden <= args.initial_hidden:
         raise ValueError("final_hidden must be greater than initial_hidden")
     if args.pre_growth_steps < 0:
         raise ValueError("pre_growth_steps must be non-negative")
@@ -158,12 +190,35 @@ def _validate_args(args: Args):
     if not 0.0 < args.exploration_final_eps <= 1.0:
         raise ValueError("exploration_final_eps must be in (0, 1]")
 
-    schedule = _growth_schedule(args)
-    if len(schedule) != args.n_growth_events:
+    expected_events = (
+        2 * len(task_steps) - 1
+        if args.use_curriculum
+        else args.n_growth_events
+    )
+    if len(schedule) != expected_events:
         raise ValueError("growth steps must be distinct")
-    if schedule and (schedule[0] <= args.learning_starts or schedule[-1] > args.n_timesteps):
+    if schedule and schedule[-1] > args.n_timesteps:
+        raise ValueError("growth steps must remain within training")
+    if schedule:
+        if args.use_curriculum and any(
+            n_steps // 2 <= args.learning_starts
+            for n_steps in task_steps
+        ):
+            raise ValueError(
+                "each task midpoint must occur after learning_starts"
+            )
+        if not args.use_curriculum and schedule[0] <= args.learning_starts:
+            raise ValueError("first growth must occur after learning_starts")
+
+    target_widths = np.rint(np.linspace(
+        args.initial_hidden,
+        args.final_hidden,
+        len(schedule) + 1,
+    )).astype(int)
+    if schedule and np.any(np.diff(target_widths) <= 0):
         raise ValueError(
-            "growth steps must be after learning_starts and within training"
+            "initial_hidden and final_hidden are too close for the "
+            "number of growth events"
         )
 
 
@@ -187,16 +242,17 @@ def _save_growth_results(log_dir, seed, controller: GrowthController):
 class GrowthController:
     """Grow from a batch sampled from DQN replay."""
 
-    def __init__(self, args: Args):
+    def __init__(self, args: Args, task_steps: list[int]):
         self.args = args
         self.module = importlib.import_module(GROWTH_MODULES[args.growth_mode])
-        self.steps = _growth_schedule(args)
+        self.steps = _growth_schedule(args, task_steps)
         self.target_widths = np.rint(np.linspace(
             args.initial_hidden,
             args.final_hidden,
-            args.n_growth_events + 1,
+            len(self.steps) + 1,
         )).astype(int).tolist()[1:]
         self.next_event = 0
+        self.current_task_index = 0
         self.training_environment_steps = 0
         self.events = []
         self.metrics_monitor = DQNMetricsMonitor(
@@ -211,6 +267,10 @@ class GrowthController:
 
     def record_environment_step(self):
         self.training_environment_steps += 1
+
+    def start_task(self, task_index):
+        self.current_task_index = int(task_index)
+        self.metrics_monitor.start_task()
 
     def apply_scheduled_growth(self, agent):
         while (
@@ -254,6 +314,7 @@ class GrowthController:
             if final_loss < self.args.bellman_residual_threshold:
                 _reset_adam(online, self.args.learning_rate)
                 self.events.append({
+                    "task_index": self.current_task_index,
                     "scheduled_step": int(scheduled_step),
                     "actual_step": int(self.training_environment_steps),
                     "hidden_before": int(hidden_before),
@@ -303,6 +364,7 @@ class GrowthController:
 
         hidden_after = online.network.encoder_size
         self.events.append({
+            "task_index": self.current_task_index,
             "scheduled_step": int(scheduled_step),
             "actual_step": int(self.training_environment_steps),
             "hidden_before": int(hidden_before),
@@ -330,6 +392,7 @@ class GrowthController:
             agent=agent,
             step=self.training_environment_steps,
             evaluation_index=evaluation_index,
+            task_index=self.current_task_index,
         )
 
 
@@ -348,25 +411,34 @@ class GrowingLunarLanderDQN(LunarLanderDQN):
 
 
 def experiment(args: Args):
-    _validate_args(args)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     if args.use_cuda:
         torch.cuda.manual_seed_all(args.seed)
+
+    wind_powers = _task_wind_powers(args)
+    n_tasks = len(wind_powers)
+    task_steps = _split_budget(args.n_timesteps, n_tasks)
+    task_evaluations = _split_budget(args.n_eval_points, n_tasks)
+    _validate_args(args, task_steps)
 
     log_dir = Path(args.output_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     with open(log_dir / f"config-{args.seed}.yaml", "w", encoding="utf-8") as stream:
         yaml.safe_dump(asdict(args), stream, sort_keys=False)
 
-    mdp = LunarLander(
-        gravity=args.gravity,
-        enable_wind=args.enable_wind,
-        wind_power=args.wind_power,
-        turbulence_power=args.turbulence_power,
-    )
-    mdp.seed(args.seed)
-    controller = GrowthController(args)
+    mdps = [
+        LunarLander(
+            gravity=args.gravity,
+            enable_wind=args.enable_wind and wind_power > 0.0,
+            wind_power=wind_power,
+            turbulence_power=args.turbulence_power,
+        )
+        for wind_power in wind_powers
+    ]
+    for task_index, mdp in enumerate(mdps):
+        mdp.seed(args.seed + task_index)
+    controller = GrowthController(args, task_steps)
 
     optimizer = {
         "class": optim.Adam,
@@ -374,9 +446,9 @@ def experiment(args: Args):
     }
     approximator_params = {
         "network": controller.module.DQNNetwork,
-        "input_shape": mdp.info.observation_space.shape,
-        "output_shape": (mdp.info.action_space.n,),
-        "n_actions": mdp.info.action_space.n,
+        "input_shape": mdps[0].info.observation_space.shape,
+        "output_shape": (mdps[0].info.action_space.n,),
+        "n_actions": mdps[0].info.action_space.n,
         "hidden_size": args.initial_hidden,
         "loss": F.mse_loss,
         "optimizer": optimizer,
@@ -389,18 +461,10 @@ def experiment(args: Args):
         "max_replay_size": args.buffer_size,
     }
 
-    n_explore = max(
-        1, int(args.n_timesteps * args.exploration_fraction)
-    )
-    epsilon = LinearParameter(
-        value=1.0,
-        threshold_value=args.exploration_final_eps,
-        n=n_explore,
-    )
     test_epsilon = Parameter(value=0.0)
-    policy = EpsGreedy(epsilon)
+    policy = EpsGreedy(Parameter(value=1.0))
     agent = GrowingLunarLanderDQN(
-        mdp.info,
+        mdps[0].info,
         policy,
         TorchApproximator,
         gradient_steps=args.gradient_steps,
@@ -415,32 +479,79 @@ def experiment(args: Args):
         training_metrics(dataset)
         controller.record_environment_step()
 
-    training_core = Core(agent, mdp, callback_step=training_step_callback)
-    evaluation_core = Core(agent, mdp)
-    steps_per_eval = args.n_timesteps // args.n_eval_points
     returns = []
+    evaluation_steps = []
+    evaluation_task_indices = []
+    task_boundaries = [0]
+    evaluation_index = 0
 
     try:
-        for evaluation_index in range(1, args.n_eval_points + 1):
-            policy.set_epsilon(epsilon)
-            training_metrics.start_block()
-            training_core.learn(
-                n_steps=steps_per_eval,
-                n_steps_per_fit=args.train_freq,
-                quiet=True,
-            )
-            controller.monitor(agent, evaluation_index)
+        for task_index, (mdp, n_steps_task, n_evals_task) in enumerate(
+            zip(mdps, task_steps, task_evaluations)
+        ):
+            agent.reset_for_new_task()
+            controller.start_task(task_index)
 
-            policy.set_epsilon(test_epsilon)
-            dataset = evaluation_core.evaluate(
-                n_episodes=args.n_test_episodes,
-                quiet=True,
+            n_explore = max(
+                1, int(n_steps_task * args.exploration_fraction)
             )
-            returns.append(np.mean(compute_J(dataset, mdp.info.gamma)))
+            epsilon = LinearParameter(
+                value=1.0,
+                threshold_value=args.exploration_final_eps,
+                n=n_explore,
+            )
+            training_core = Core(
+                agent, mdp, callback_step=training_step_callback
+            )
+            evaluation_core = Core(agent, mdp)
+
+            for n_steps_block in _split_budget(
+                n_steps_task, n_evals_task
+            ):
+                evaluation_index += 1
+                policy.set_epsilon(epsilon)
+                training_metrics.start_block()
+                training_core.learn(
+                    n_steps=n_steps_block,
+                    n_steps_per_fit=args.train_freq,
+                    quiet=True,
+                )
+                controller.monitor(agent, evaluation_index)
+
+                policy.set_epsilon(test_epsilon)
+                dataset = evaluation_core.evaluate(
+                    n_episodes=args.n_test_episodes,
+                    quiet=True,
+                )
+                returns.append(np.mean(compute_J(
+                    dataset, mdp.info.gamma
+                )))
+                evaluation_steps.append(
+                    controller.training_environment_steps
+                )
+                evaluation_task_indices.append(task_index)
+
+            task_boundaries.append(
+                controller.training_environment_steps
+            )
     finally:
-        mdp.stop()
+        for mdp in mdps:
+            mdp.stop()
 
     np.save(log_dir / f"J-{args.seed}.npy", np.asarray(returns))
+    task_arrays = {
+        "evaluation_steps": evaluation_steps,
+        "evaluation_task_indices": evaluation_task_indices,
+        "task_boundaries": task_boundaries,
+        "task_wind_powers": wind_powers,
+        "task_timesteps": task_steps,
+        "task_evaluations": task_evaluations,
+    }
+    for name, values in task_arrays.items():
+        np.save(
+            log_dir / f"{name}-{args.seed}.npy",
+            np.asarray(values),
+        )
     save_training_metrics(str(log_dir), args.seed, training_metrics, agent)
     _save_growth_results(str(log_dir), args.seed, controller)
     return returns

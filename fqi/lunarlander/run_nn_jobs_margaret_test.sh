@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=dqn_lunarlander_%a
+#SBATCH --job-name=dqn_lunarlander_test
 #SBATCH --partition=tau
 #SBATCH --time=1-00:00:00
 #SBATCH --gres=gpu:1

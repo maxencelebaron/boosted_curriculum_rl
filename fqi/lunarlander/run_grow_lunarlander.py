@@ -43,6 +43,8 @@ GROWTH_MODULES = {
     "random": "fqi.2_network_fqi_grow_randomly",
     "random-0": "fqi.2_network_fqi_grow_randomly",
     "svd": "fqi.3_network_fqi_optimizer_plus_svd",
+    "als": "fqi.3_network_fqi_optimizer_plus_svd",
+    "stagewise-als": "fqi.3_network_fqi_optimizer_plus_svd",
     "gromo_one_layer": "fqi.4_network_fqi_tiny_one_layer",
 }
 
@@ -85,8 +87,8 @@ class Args:
     turbulence_power: float = 1.5
     use_cuda: bool = True
 
-    growth_mode: str = "svd"
-    """Growth strategy: random, random-0, svd, or gromo_one_layer."""
+    growth_mode: str = "als"
+    """Growth strategy: random, random-0, als, stagewise-als, or gromo_one_layer."""
     initial_hidden: int = 32
     """Initial width of the growable layer."""
     final_hidden: int = 64
@@ -430,14 +432,20 @@ class GrowthController:
                 zero_fan_out=(self.args.growth_mode == "random-0"),
             )
             online.network = new_network
-        elif self.args.growth_mode == "svd":
-            new_network, singular_values = self.module.grow_network_svd(
+        elif self.args.growth_mode in ("svd", "als", "stagewise-als"):
+            als_method = (
+                "stagewise"
+                if self.args.growth_mode == "stagewise-als"
+                else "als"
+            )
+            new_network, singular_values = self.module.grow_network_als(
                 network,
                 states,
                 actions,
                 td_targets,
                 d_a=neurons_to_add,
                 numerical_threshold=self.args.numerical_threshold,
+                method=als_method,
             )
             online.network = new_network
         elif self.args.growth_mode == "gromo_one_layer":

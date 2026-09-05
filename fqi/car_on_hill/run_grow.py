@@ -206,7 +206,7 @@ def _grow_step(
         regressor._optimizer = None
 
     elif growth_mode == "svd":
-        new_net, svd_singular_values = module.grow_network_svd(
+        new_net, svd_singular_values = module.grow_network_als(
             q_network,
             states,
             actions,

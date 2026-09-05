@@ -1,0 +1,140 @@
+La perte individuelle issue du modèle gaussien est
+
+\[
+L_i(\theta)
+=
+L(y_i,Q_\theta(s_i,a_i))
+=
+\frac{1}{2\widetilde\sigma^2}
+\bigl(y_i-Q_\theta(s_i,a_i)\bigr)^2.
+\]
+
+La loss agrégée initiale est
+
+\[
+\mathcal L(\theta)
+=
+\frac1n\sum_{i=1}^n L_i(\theta),
+\]
+
+tandis que la version scalée considérée est
+
+\[
+\mathcal L_R(\theta)
+=
+R\sum_{i=1}^n L_i(\theta),
+\qquad
+R=\frac2n.
+\]
+
+Ainsi,
+
+\[
+\mathcal L_R(\theta)=2\mathcal L(\theta),
+\qquad
+\arg\min_\theta\mathcal L_R(\theta)
+=
+\arg\min_\theta\mathcal L(\theta).
+\]
+
+Dans le code, en passant de $R=1/n$ à $R=2/n$, les quantités à modifier sont :
+
+\begin{itemize}
+    \item \textbf{Loss agrégée}
+    \[
+    \mathcal L_R
+    =
+    \frac{2}{n}\sum_i
+    \frac{(y_i-Q_i)^2}{2\widetilde\sigma^2}
+    =
+    2\mathcal L.
+    \]
+
+    \item \textbf{Gradient de chaque couche}
+    \[
+    H_l
+    =
+    -\frac{R}{\widetilde\sigma^2}
+    \sum_i (y_i-Q_i)\,
+    r_{l,i}b_{l-1,i}^\top.
+    \]
+    Il est donc multiplié par $2$.
+
+    \item \textbf{Facteur K-FAC d’activations}
+    \[
+    \widehat A_{l-1}
+    =
+    R\sum_i b_{l-1,i}b_{l-1,i}^\top
+    =
+    \frac{2}{n}\sum_i b_{l-1,i}b_{l-1,i}^\top.
+    \]
+    Il est multiplié par $2$.
+
+    \item \textbf{Bloc K-FAC estimé}
+    \[
+    \widehat F_{ll}^{\mathrm{KFAC}}
+    =
+    \widehat A_{l-1}\otimes\widehat G_l.
+    \]
+    Il est donc multiplié par $2$.
+
+    \item \textbf{Bloc exact estimé, si le code le calcule}
+    \[
+    \widehat F_{ll}
+    =
+    \frac{R}{\widetilde\sigma^2}
+    \sum_i
+    (b_{l-1,i}b_{l-1,i}^\top)
+    \otimes
+    (r_{l,i}r_{l,i}^\top).
+    \]
+
+    \item \textbf{Bloc exact de dernière couche}
+    \[
+    \widehat F_{LL}
+    =
+    \frac{R}{\widetilde\sigma^2}
+    \sum_{a\in\mathcal A}
+    \left(
+    \sum_{i:a_i=a}
+    b_{L-1,i}b_{L-1,i}^\top
+    \right)
+    \otimes e_ae_a^\top.
+    \]
+
+    \item \textbf{Empirical Fisher, s’il est implémenté}
+    \[
+    \widehat E
+    =
+    R\sum_i
+    \nabla_\theta L_i\nabla_\theta L_i^\top.
+    \]
+    Il est multiplié par $2$.
+\end{itemize}
+
+Les quantités suivantes ne changent pas :
+
+\begin{itemize}
+    \item $D_v$, $g_l$ et $r_l$ ;
+
+    \item $\widehat G_l$ :
+    \[
+    \widehat G_l
+    =
+    \frac{1}{n\widetilde\sigma^2}
+    \sum_i r_{l,i}r_{l,i}^\top;
+    \]
+
+    \item $\widehat G_L=\frac{1}{n\widetilde\sigma^2}
+    \operatorname{diag}(n_1,\ldots,n_{d_L})$ ;
+
+    \item toutes les formules théoriques écrites avec des espérances.
+\end{itemize}
+
+Sans damping, $H_l$ et $\widehat A_{l-1}$ étant tous deux multipliés par $2$, la mise à jour
+
+\[
+-\eta\widehat G_l^\dagger H_l\widehat A_{l-1}^\dagger
+\]
+
+reste identique. Avec damping, ce changement d’échelle doit être répercuté dans le damping.

@@ -1,13 +1,14 @@
 #!/bin/bash
 #SBATCH --job-name=dqn_lunarlander_%a
 #SBATCH -C a100
+#SBATCH --qos=qos_gpu_a100-dev
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --hint=nomultithread
-#SBATCH --time=8:00:00
+#SBATCH --time=01:55:00
 #SBATCH --output=slurm/logs/%x_%A_%a.out
 #SBATCH --error=slurm/logs/%x_%A_%a.err
-#SBATCH --array=0-17%5
+#SBATCH --array=0-5
 #SBATCH -A inl@a100
 
 module purge
@@ -16,12 +17,8 @@ module load arch/a100
 export PYTHONPATH=$PYTHONPATH:$PWD/../..
 
 METHODS=(
-  "baseline"
-  "random"
-  "random-0"
   "als"
   "stagewise-als"
-  "gromo_one_layer"
 )
 
 SEEDS=(95 96 97)

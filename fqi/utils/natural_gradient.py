@@ -80,7 +80,7 @@ def kfac_factors(
     layer_inputs = layer_inputs.detach().to(dtype=accumulation_dtype)
     sensitivities = sensitivities.detach().to(dtype=accumulation_dtype)
     batch_size = layer_inputs.shape[0]
-    s_factor = layer_inputs.T @ layer_inputs / batch_size
+    s_factor = 2 * layer_inputs.T @ layer_inputs / batch_size
     gamma_factor = sensitivities.T @ sensitivities / (
         batch_size * noise_variance
     )
@@ -214,7 +214,7 @@ def compute_kfac_updates(
     )
     loss = torch.nn.functional.mse_loss(
         predictions, targets.reshape(-1)
-    ) / (2 * noise_variance)
+    ) / noise_variance
     if check_finite and not torch.isfinite(loss):
         raise FloatingPointError("The K-FAC training loss is NaN or Inf.")
     network.zero_grad(set_to_none=True)

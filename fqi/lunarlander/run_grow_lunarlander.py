@@ -42,7 +42,6 @@ torch.set_num_threads(1)
 GROWTH_MODULES = {
     "random": "fqi.2_network_fqi_grow_randomly",
     "random-0": "fqi.2_network_fqi_grow_randomly",
-    "svd": "fqi.3_network_fqi_optimizer_plus_svd",
     "als": "fqi.3_network_fqi_optimizer_plus_svd",
     "stagewise-als": "fqi.3_network_fqi_optimizer_plus_svd",
     "gromo_one_layer": "fqi.4_network_fqi_tiny_one_layer",
@@ -240,6 +239,35 @@ def _reset_adam(torch_approximator, learning_rate):
     )
 
 
+@torch.no_grad()
+def _growth_matrix_singular_values(network, hidden_before: int) -> list[float]:
+    """Singular values of the new neurons matrix weight"""
+    encoder_linear = (
+        network.encoder.layer
+        if hasattr(network.encoder, "layer")
+        else network.encoder[0]
+    )
+    q_head_linear = (
+        network.q_head.layer
+        if hasattr(network.q_head, "layer")
+        else network.q_head
+    )
+    hidden_after = encoder_linear.out_features
+    if hidden_after <= hidden_before:
+        return []
+
+    added_weight = encoder_linear.weight[hidden_before:hidden_after]
+    added_bias = encoder_linear.bias[hidden_before:hidden_after, None]
+    added_augmented = torch.cat((added_weight, added_bias), dim=1)
+    added_fan_out = q_head_linear.weight[:, hidden_before:hidden_after]
+    growth_matrix = added_fan_out @ added_augmented
+    added_neurons = hidden_after - hidden_before
+    return [
+        float(value)
+        for value in torch.linalg.svdvals(growth_matrix)[:added_neurons].cpu()
+    ]
+
+
 def _save_growth_results(log_dir, seed, controller: GrowthController):
     controller.save_events()
     controller.metrics_monitor.save(log_dir, seed)
@@ -336,7 +364,7 @@ class GrowthController:
             _, final_loss, losses = optimize(
                 self.args.natural_gradient_damping
             )
-            return final_loss, losses, False, []
+            return final_loss, [*losses, final_loss], False, []
         except FloatingPointError as first_error:
             self._restore_pre_growth_state(
                 network, online._optimizer, network_state, optimizer_state
@@ -360,7 +388,12 @@ class GrowthController:
             try:
                 _, final_loss, losses = optimize(retry_damping)
                 online._optimizer.param_groups[0]["lr"] = original_step_size
-                return final_loss, losses, True, [str(first_error)]
+                return (
+                    final_loss,
+                    [*losses, final_loss],
+                    True,
+                    [str(first_error)],
+                )
             except FloatingPointError as retry_error:
                 self._restore_pre_growth_state(
                     network, online._optimizer, network_state,
@@ -432,7 +465,7 @@ class GrowthController:
                 zero_fan_out=(self.args.growth_mode == "random-0"),
             )
             online.network = new_network
-        elif self.args.growth_mode in ("svd", "als", "stagewise-als"):
+        elif self.args.growth_mode in ("als", "stagewise-als"):
             als_method = (
                 "stagewise"
                 if self.args.growth_mode == "stagewise-als"
@@ -459,6 +492,19 @@ class GrowthController:
                 statistical_threshold=self.args.statistical_threshold,
             )
 
+        if self.args.growth_mode not in ("als", "stagewise-als"):
+            singular_values = _growth_matrix_singular_values(
+                online.network, hidden_before
+            )
+
+        with torch.no_grad():
+            post_growth_values = online.network(states).gather(
+                1, actions.reshape(-1, 1)
+            ).squeeze(1)
+            post_growth_loss = F.mse_loss(
+                td_targets, post_growth_values
+            ).item()
+
         _reset_adam(online, self.args.learning_rate)
 
         # The old target has a different width. Rebuilding it also performs
@@ -478,6 +524,7 @@ class GrowthController:
             "skipped": False,
             "pre_growth_retry_used": pre_growth_retry_used,
             "pre_growth_losses": [float(x) for x in pre_growth_losses],
+            "post_growth_loss": float(post_growth_loss),
             "singular_values": [float(x) for x in singular_values],
         })
         if hidden_after > hidden_before:

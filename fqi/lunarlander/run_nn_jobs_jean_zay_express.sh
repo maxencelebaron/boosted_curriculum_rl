@@ -8,7 +8,7 @@
 #SBATCH --time=01:55:00
 #SBATCH --output=slurm/logs/%x_%A_%a.out
 #SBATCH --error=slurm/logs/%x_%A_%a.err
-#SBATCH --array=0-5
+#SBATCH --array=0-8
 #SBATCH -A inl@a100
 
 module purge
@@ -16,9 +16,12 @@ module load arch/a100
 
 export PYTHONPATH=$PYTHONPATH:$PWD/../..
 
+EXPERIMENT_DIR="logs/diagnostic_post_growth_loss"
+
 METHODS=(
   "als"
   "stagewise-als"
+  "gromo_one_layer"
 )
 
 SEEDS=(95 96 97)
@@ -43,5 +46,10 @@ else
     --use-natural-gradient \
     --seed "$SEED" \
     --growth-mode "$METHOD" \
-    --output-dir "logs/dqn_lunarlander_grow_$OUTPUT_NAME"
+    --n-timesteps 20000 \
+    --n-eval-points 10 \
+    --n-test-episodes 3 \
+    --n-growth-events 1 \
+    --n-plasticity-measurements 0 \
+    --output-dir "$EXPERIMENT_DIR/debug_growth_loss_$OUTPUT_NAME"
 fi

@@ -268,6 +268,18 @@ def _growth_matrix_singular_values(network, hidden_before: int) -> list[float]:
     ]
 
 
+def _replay_batch_from_indices(replay_memory, indices):
+    """Build a replay batch from explicitly selected buffer indices."""
+    return (
+        np.array([np.array(replay_memory._states[i]) for i in indices]),
+        np.array([replay_memory._actions[i] for i in indices]),
+        np.array([replay_memory._rewards[i] for i in indices]),
+        np.array([np.array(replay_memory._next_states[i]) for i in indices]),
+        np.array([replay_memory._absorbing[i] for i in indices]),
+        np.array([replay_memory._last[i] for i in indices]),
+    )
+
+
 def _save_growth_results(log_dir, seed, controller: GrowthController):
     controller.save_events()
     controller.metrics_monitor.save(log_dir, seed)
@@ -408,8 +420,28 @@ class GrowthController:
         network = online.network
         hidden_before = network.encoder_size
         neurons_to_add = max(0, target_width - hidden_before)
+        batch_size = self.args.grow_batch_size
+        replay_memory = agent._replay_memory
+        if replay_memory.size < 2 * batch_size:
+            raise ValueError(
+                "The replay memory must contain at least twice "
+                "grow_batch_size to build disjoint growth and validation "
+                "batches."
+            )
+        sampled_indices = np.random.choice(
+            replay_memory.size, size=2 * batch_size, replace=False
+        )
+        growth_batch = _replay_batch_from_indices(
+            replay_memory, sampled_indices[:batch_size]
+        )
+        validation_batch = _replay_batch_from_indices(
+            replay_memory, sampled_indices[batch_size:]
+        )
         states, actions, td_targets = replay_batch_to_tensors(
-            agent, agent._replay_memory.get(self.args.grow_batch_size)
+            agent, growth_batch
+        )
+        validation_states, validation_actions, validation_td_targets = (
+            replay_batch_to_tensors(agent, validation_batch)
         )
         pre_growth_losses = []
         pre_growth_retry_used = False
@@ -456,6 +488,14 @@ class GrowthController:
                     "pre_growth_losses": [float(x) for x in pre_growth_losses],
                 })
                 return
+
+        with torch.no_grad():
+            pre_growth_validation_values = network(validation_states).gather(
+                1, validation_actions.reshape(-1, 1)
+            ).squeeze(1)
+            pre_growth_validation_loss = F.mse_loss(
+                validation_td_targets, pre_growth_validation_values
+            ).item()
 
         singular_values = []
         if self.args.growth_mode in ("random", "random-0"):
@@ -504,6 +544,12 @@ class GrowthController:
             post_growth_loss = F.mse_loss(
                 td_targets, post_growth_values
             ).item()
+            post_growth_validation_values = online.network(
+                validation_states
+            ).gather(1, validation_actions.reshape(-1, 1)).squeeze(1)
+            post_growth_validation_loss = F.mse_loss(
+                validation_td_targets, post_growth_validation_values
+            ).item()
 
         _reset_adam(online, self.args.learning_rate)
 
@@ -525,6 +571,12 @@ class GrowthController:
             "pre_growth_retry_used": pre_growth_retry_used,
             "pre_growth_losses": [float(x) for x in pre_growth_losses],
             "post_growth_loss": float(post_growth_loss),
+            "pre_growth_validation_loss": float(
+                pre_growth_validation_loss
+            ),
+            "post_growth_validation_loss": float(
+                post_growth_validation_loss
+            ),
             "singular_values": [float(x) for x in singular_values],
         })
         if hidden_after > hidden_before:

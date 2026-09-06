@@ -398,13 +398,15 @@ class DQNVisualizer:
         "baseline": "C3",
         "random": "C0",
         "random-0": "C1",
-        "svd": "C2",
+        "als": "C2",
+        "stagewise-als": "C5",
         "gromo_one_layer": "C4",
     }
     DISPLAY_LABELS = {
         "baseline": "Baseline",
         "gromo_one_layer": "Tiny",
-        "svd": "ALS",
+        "als": "ALS",
+        "stagewise-als": "Stagewise ALS",
     }
 
     UNSMOOTHED_METRICS = (

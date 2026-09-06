@@ -301,6 +301,69 @@ def _residual_loss(
     return (residuals - predictions).square().mean()
 
 
+@torch.no_grad()
+def _als_amplitude_line_search(
+    Omega: torch.Tensor,
+    A: torch.Tensor,
+    features: torch.Tensor,
+    actions: torch.Tensor,
+    residuals: torch.Tensor,
+    activation: nn.Module,
+    armijo_alpha: float = 0.1,
+    reduction: float = 0.5,
+    max_iter: int = 20,
+) -> float:
+    """Select a non-amplifying ALS extension scale with Armijo backtracking."""
+    projected_features = features @ A
+    linearized_correction = (
+        Omega[actions] * projected_features
+    ).sum(dim=1)
+    directional_derivative = -2.0 * (
+        residuals * linearized_correction
+    ).mean()
+
+    if (
+        not torch.isfinite(directional_derivative)
+        or directional_derivative >= 0
+    ):
+        warnings.warn(
+            "The ALS extension is not a descent direction according to the "
+            "linearized loss; neuron addition is rejected.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return 0.0
+
+    initial_loss = residuals.square().mean()
+    amplitude = 1.0
+    for _ in range(max_iter):
+        sqrt_amplitude = math.sqrt(amplitude)
+        activated_features = activation(
+            sqrt_amplitude * projected_features
+        )
+        actual_correction = (
+            sqrt_amplitude * Omega[actions] * activated_features
+        ).sum(dim=1)
+        candidate_loss = (
+            residuals - actual_correction
+        ).square().mean()
+        armijo_bound = (
+            initial_loss
+            + armijo_alpha * amplitude * directional_derivative
+        )
+        if torch.isfinite(candidate_loss) and candidate_loss <= armijo_bound:
+            return amplitude
+        amplitude *= reduction
+
+    warnings.warn(
+        "ALS amplitude backtracking failed to satisfy the Armijo condition "
+        f"after {max_iter} iterations; neuron addition is rejected.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+    return 0.0
+
+
 def _run_als(
     features: torch.Tensor,
     actions: torch.Tensor,
@@ -478,7 +541,10 @@ def grow_network_als(
     line_search_armijo_alpha: float = 0.1,
     line_search_reduction: float = 0.5,
     line_search_max_iter: int = 20,
-) -> tuple[Q_Network, np.ndarray]:
+    amplitude_armijo_alpha: float = 0.1,
+    amplitude_reduction: float = 0.5,
+    amplitude_max_iter: int = 20,
+) -> tuple[Q_Network, np.ndarray, float]:
     """Grow the encoder using an ALS low-rank Bellman correction."""
     if d_a < 0:
         raise ValueError(f"d_a must be nonnegative, got {d_a}")
@@ -502,6 +568,12 @@ def grow_network_als(
         raise ValueError("line_search_reduction must belong to (0, 1)")
     if line_search_max_iter < 1:
         raise ValueError("line_search_max_iter must be positive")
+    if not 0 < amplitude_armijo_alpha < 0.5:
+        raise ValueError("amplitude_armijo_alpha must belong to (0, 0.5)")
+    if not 0 < amplitude_reduction < 1:
+        raise ValueError("amplitude_reduction must belong to (0, 1)")
+    if amplitude_max_iter < 1:
+        raise ValueError("amplitude_max_iter must be positive")
 
     reference_parameter = next(old_net.parameters())
     device, dtype = reference_parameter.device, reference_parameter.dtype
@@ -572,6 +644,30 @@ def grow_network_als(
     Omega_final = U[:, :added_neurons] * sqrt_singular_values
     A_final = Vh[:added_neurons].T * sqrt_singular_values
 
+    amplitude = 0.0
+    if added_neurons:
+        amplitude = _als_amplitude_line_search(
+            Omega_final,
+            A_final,
+            features,
+            actions,
+            residuals,
+            old_net.encoder[1],
+            amplitude_armijo_alpha,
+            amplitude_reduction,
+            amplitude_max_iter,
+        )
+        if amplitude > 0:
+            factor_scale = math.sqrt(amplitude)
+            Omega_final = factor_scale * Omega_final
+            A_final = factor_scale * A_final
+            retained = amplitude * retained
+        else:
+            added_neurons = 0
+            Omega_final = Omega_final[:, :0]
+            A_final = A_final[:, :0]
+            retained = retained[:0]
+
     if hasattr(old_net, "new_with_hidden_size"):
         new_net = old_net.new_with_hidden_size(old_h + added_neurons)
     else:
@@ -590,7 +686,7 @@ def grow_network_als(
             new_net.q_head.weight[:, old_h:].copy_(Omega_final)
     new_net.train(old_net.training)
 
-    return new_net, retained.detach().cpu().numpy()
+    return new_net, retained.detach().cpu().numpy(), amplitude
 
 
 # def grow_network_svd(

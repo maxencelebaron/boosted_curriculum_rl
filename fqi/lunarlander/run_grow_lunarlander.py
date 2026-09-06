@@ -498,6 +498,7 @@ class GrowthController:
             ).item()
 
         singular_values = []
+        als_amplitude = None
         if self.args.growth_mode in ("random", "random-0"):
             new_network = self.module.grow_network(
                 network,
@@ -511,14 +512,16 @@ class GrowthController:
                 if self.args.growth_mode == "stagewise-als"
                 else "als"
             )
-            new_network, singular_values = self.module.grow_network_als(
-                network,
-                states,
-                actions,
-                td_targets,
-                d_a=neurons_to_add,
-                numerical_threshold=self.args.numerical_threshold,
-                method=als_method,
+            new_network, singular_values, als_amplitude = (
+                self.module.grow_network_als(
+                    network,
+                    states,
+                    actions,
+                    td_targets,
+                    d_a=neurons_to_add,
+                    numerical_threshold=self.args.numerical_threshold,
+                    method=als_method,
+                )
             )
             online.network = new_network
         elif self.args.growth_mode == "gromo_one_layer":
@@ -560,6 +563,10 @@ class GrowthController:
         _reset_adam(target, self.args.learning_rate)
 
         hidden_after = online.network.encoder_size
+        als_growth_rejected = (
+            self.args.growth_mode in ("als", "stagewise-als")
+            and als_amplitude == 0.0
+        )
         self._record_event({
             "task_index": self.current_task_index,
             "scheduled_step": int(scheduled_step),
@@ -567,7 +574,10 @@ class GrowthController:
             "hidden_before": int(hidden_before),
             "hidden_after": int(hidden_after),
             "neurons_added": int(hidden_after - hidden_before),
-            "skipped": False,
+            "skipped": als_growth_rejected,
+            "skip_reason": (
+                "no_accepted_als_amplitude" if als_growth_rejected else None
+            ),
             "pre_growth_retry_used": pre_growth_retry_used,
             "pre_growth_losses": [float(x) for x in pre_growth_losses],
             "post_growth_loss": float(post_growth_loss),
@@ -576,6 +586,9 @@ class GrowthController:
             ),
             "post_growth_validation_loss": float(
                 post_growth_validation_loss
+            ),
+            "als_amplitude": (
+                float(als_amplitude) if als_amplitude is not None else None
             ),
             "singular_values": [float(x) for x in singular_values],
         })

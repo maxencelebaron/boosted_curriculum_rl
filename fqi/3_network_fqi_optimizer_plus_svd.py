@@ -265,7 +265,13 @@ def _update_A(
     design = torch.einsum(
         "nk,nd->nkd", omega_rows, features
     ).reshape(features.shape[0], rank * feature_dim)
-    W = _least_squares(design, residuals, ridge).reshape(
+    # H and its target are both normalized by the global sqrt(N).
+    sqrt_n_samples = math.sqrt(features.shape[0])
+    W = _least_squares(
+        design / sqrt_n_samples,
+        residuals / sqrt_n_samples,
+        ridge,
+    ).reshape(
         rank, feature_dim
     )
     return W.T
@@ -282,11 +288,15 @@ def _update_Omega(
     """Minimize the residual loss over each action row of Omega."""
     projected_features = features @ A
     Omega = features.new_zeros((n_actions, A.shape[1]))
+    # Keep the global normalization from H, including in each action block.
+    sqrt_n_samples = math.sqrt(features.shape[0])
     for action in range(n_actions):
         mask = actions == action
         if mask.any():
             Omega[action] = _least_squares(
-                projected_features[mask], residuals[mask], ridge
+                projected_features[mask] / sqrt_n_samples,
+                residuals[mask] / sqrt_n_samples,
+                ridge,
             )
     return Omega
 

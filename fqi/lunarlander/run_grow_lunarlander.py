@@ -117,6 +117,10 @@ class Args:
     """Threshold to consider an eigenvalue as zero in the SVD"""
     statistical_threshold: float = 0.0
     """Threshold to decide how many singular values (number of neurons) to keep"""
+    als_ridge_candidates: tuple[float, ...] = (0.0, 1e-4, 1e-2, 1.0, 10.0)
+    """Ridge coefficients compared by cross-validation for ALS growth."""
+    als_ridge_cv_folds: int = 4
+    """Number of folds used to select the ALS ridge coefficient."""
     metric_monitoring_batch_size: int = 128
     """Fixed replay sample used to monitor representation metrics."""
     n_plasticity_measurements: int = 20
@@ -415,6 +419,62 @@ class GrowthController:
                     str(first_error), str(retry_error)
                 ]
 
+    def _select_als_ridge(self, network, states, actions, td_targets,
+                          neurons_to_add, als_method):
+        """Select the ALS ridge coefficient by K-fold cross-validation."""
+        n_samples = states.shape[0]
+        n_folds = self.args.als_ridge_cv_folds
+        if n_folds < 2 or n_folds > n_samples:
+            raise ValueError(
+                "als_ridge_cv_folds must belong to [2, grow_batch_size]."
+            )
+        candidates = self.args.als_ridge_candidates
+        if not candidates or any(ridge < 0 for ridge in candidates):
+            raise ValueError(
+                "als_ridge_candidates must contain nonnegative values."
+            )
+
+        indices = torch.arange(n_samples, device=states.device)
+        folds = torch.tensor_split(indices, n_folds)
+        cv_results = []
+
+        for ridge in candidates:
+            fold_losses = []
+            for held_out_index, held_out in enumerate(folds):
+                training = torch.cat([
+                    fold for fold_index, fold in enumerate(folds)
+                    if fold_index != held_out_index
+                ])
+                candidate_network, _, _ = self.module.grow_network_als(
+                    network,
+                    states[training],
+                    actions[training],
+                    td_targets[training],
+                    d_a=neurons_to_add,
+                    numerical_threshold=self.args.numerical_threshold,
+                    method=als_method,
+                    ridge=float(ridge),
+                )
+                with torch.no_grad():
+                    held_out_values = candidate_network(
+                        states[held_out]
+                    ).gather(
+                        1, actions[held_out].reshape(-1, 1)
+                    ).squeeze(1)
+                    fold_loss = F.mse_loss(
+                        td_targets[held_out], held_out_values
+                    ).item()
+                fold_losses.append(float(fold_loss))
+
+            cv_results.append({
+                "ridge": float(ridge),
+                "mean_loss": float(np.mean(fold_losses)),
+                "fold_losses": fold_losses,
+            })
+
+        best_result = min(cv_results, key=lambda result: result["mean_loss"])
+        return best_result["ridge"], cv_results
+
     def _grow(self, agent, scheduled_step, target_width):
         online = agent.approximator.model
         network = online.network
@@ -499,6 +559,10 @@ class GrowthController:
 
         singular_values = []
         als_amplitude = None
+        als_selected_ridge = None
+        als_ridge_cv_results = None
+        tiny_amplitude = None
+        tiny_skip_reason = None
         if self.args.growth_mode in ("random", "random-0"):
             new_network = self.module.grow_network(
                 network,
@@ -512,6 +576,16 @@ class GrowthController:
                 if self.args.growth_mode == "stagewise-als"
                 else "als"
             )
+            als_selected_ridge, als_ridge_cv_results = (
+                self._select_als_ridge(
+                    network,
+                    states,
+                    actions,
+                    td_targets,
+                    neurons_to_add,
+                    als_method,
+                )
+            )
             new_network, singular_values, als_amplitude = (
                 self.module.grow_network_als(
                     network,
@@ -521,18 +595,21 @@ class GrowthController:
                     d_a=neurons_to_add,
                     numerical_threshold=self.args.numerical_threshold,
                     method=als_method,
+                    ridge=als_selected_ridge,
                 )
             )
             online.network = new_network
         elif self.args.growth_mode == "gromo_one_layer":
-            self.module.grow_network_gromo(
-                network,
-                states,
-                actions,
-                td_targets,
-                maximum_added_neurons=neurons_to_add,
-                numerical_threshold=self.args.numerical_threshold,
-                statistical_threshold=self.args.statistical_threshold,
+            _, tiny_amplitude, tiny_skip_reason = (
+                self.module.grow_network_gromo(
+                    network,
+                    states,
+                    actions,
+                    td_targets,
+                    maximum_added_neurons=neurons_to_add,
+                    numerical_threshold=self.args.numerical_threshold,
+                    statistical_threshold=self.args.statistical_threshold,
+                )
             )
 
         if self.args.growth_mode not in ("als", "stagewise-als"):
@@ -563,21 +640,29 @@ class GrowthController:
         _reset_adam(target, self.args.learning_rate)
 
         hidden_after = online.network.encoder_size
+        neurons_added = int(hidden_after - hidden_before)
         als_growth_rejected = (
             self.args.growth_mode in ("als", "stagewise-als")
             and als_amplitude == 0.0
         )
+        growth_skipped = neurons_added == 0
+        if not growth_skipped:
+            skip_reason = None
+        elif als_growth_rejected:
+            skip_reason = "no_accepted_als_amplitude"
+        elif self.args.growth_mode == "gromo_one_layer":
+            skip_reason = tiny_skip_reason or "tiny_no_neurons_applied"
+        else:
+            skip_reason = "no_neurons_added"
         self._record_event({
             "task_index": self.current_task_index,
             "scheduled_step": int(scheduled_step),
             "actual_step": int(self.training_environment_steps),
             "hidden_before": int(hidden_before),
             "hidden_after": int(hidden_after),
-            "neurons_added": int(hidden_after - hidden_before),
-            "skipped": als_growth_rejected,
-            "skip_reason": (
-                "no_accepted_als_amplitude" if als_growth_rejected else None
-            ),
+            "neurons_added": neurons_added,
+            "skipped": growth_skipped,
+            "skip_reason": skip_reason,
             "pre_growth_retry_used": pre_growth_retry_used,
             "pre_growth_losses": [float(x) for x in pre_growth_losses],
             "post_growth_loss": float(post_growth_loss),
@@ -590,6 +675,9 @@ class GrowthController:
             "als_amplitude": (
                 float(als_amplitude) if als_amplitude is not None else None
             ),
+            "als_selected_ridge": als_selected_ridge,
+            "als_ridge_cv_results": als_ridge_cv_results,
+            "tiny_amplitude": tiny_amplitude,
             "singular_values": [float(x) for x in singular_values],
         })
         if hidden_after > hidden_before:

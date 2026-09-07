@@ -77,8 +77,10 @@ if [ "$METHOD" = "baseline" ]; then
     --output-dir "$RUN_DIR/dqn_lunarlander"
 else
   NATURAL_GRADIENT_ARG=()
+  PRE_GROWTH_STEPS=0
   if [ "$METHOD" = "als" ] || [ "$METHOD" = "stagewise-als" ]; then
     NATURAL_GRADIENT_ARG=(--use-natural-gradient)
+    PRE_GROWTH_STEPS=10
   fi
 
   python run_grow_lunarlander.py \
@@ -87,5 +89,6 @@ else
     --seed "$SEED" \
     --growth-mode "$METHOD" \
     --grow-batch-size 512 \
+    --pre-growth-steps "$PRE_GROWTH_STEPS" \
     --output-dir "$RUN_DIR/dqn_lunarlander_grow_$OUTPUT_NAME"
 fi

@@ -1066,7 +1066,6 @@ class DQNVisualizer:
         width_plotted = False
         neurons_plotted = False
         skipped_plotted = False
-        zero_plotted = False
 
         for experiment in self.experiments:
             if not experiment.is_growth:
@@ -1162,25 +1161,19 @@ class DQNVisualizer:
             )
             neurons_plotted = True
 
-            for step_index, step in enumerate(common_steps):
+            for step in common_steps:
                 events = [event_map[step] for event_map in event_maps]
-                if any(event.get("skipped", False) for event in events):
+                if any(
+                    event.get("skipped", False)
+                    or event.get("neurons_added", 0) == 0
+                    for event in events
+                ):
                     neurons_ax.scatter(
                         step, 0, marker="x", s=55, linewidths=1.5,
                         color=experiment.color, zorder=4,
                         label="Skipped event" if not skipped_plotted else None,
                     )
                     skipped_plotted = True
-                elif added_mean[step_index] == 0:
-                    neurons_ax.scatter(
-                        step, 0, marker="o", s=42, facecolors="none",
-                        edgecolors=experiment.color, linewidths=1.2, zorder=4,
-                        label=(
-                            "Executed, zero neurons"
-                            if not zero_plotted else None
-                        ),
-                    )
-                    zero_plotted = True
 
         if width_plotted:
             finish_figure(

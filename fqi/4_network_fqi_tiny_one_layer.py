@@ -199,10 +199,11 @@ def grow_network_gromo(
     maximum_added_neurons: int | None = None,
     numerical_threshold: float = 1e-6,
     statistical_threshold: float = 0,
-) -> torch.Tensor | None:
+) -> tuple[torch.Tensor | None, float, str | None]:
     """
     Grow encoder output in-place via gromo (q_head is the downstream layer).
-    Returns eigenvalues_extension or None.
+    Returns the extension eigenvalues, the selected line-search amplitude
+    gamma, and the reason why no neuron was added (if known).
     """
     loss_sum = nn.MSELoss(reduction="sum")
     q_head = q_network.q_head
@@ -246,6 +247,7 @@ def grow_network_gromo(
         )
         # q_head.normalize_optimal_updates(normalization_type="weird_normalization")
     eigenvalues = q_head.eigenvalues_extension
+    candidate_neurons = 0 if eigenvalues is None else eigenvalues.numel()
 
     dataset = torch.utils.data.TensorDataset(states, td_targets)
     grow_dataloader = torch.utils.data.DataLoader(
@@ -259,7 +261,7 @@ def grow_network_gromo(
     def _loss_fn(q_vals, targets):
         return F.mse_loss(q_vals.gather(1, _actions).squeeze(), targets)
 
-    line_search(
+    gamma, _, _, _, _, _ = line_search(
         model=q_network,
         layer=q_head,
         dataloader=grow_dataloader,
@@ -269,10 +271,21 @@ def grow_network_gromo(
         device=_device,
     )
 
-    if q_head.scaling_factor.item() > 1e-5:
+    scaling_factor = float(q_head.scaling_factor.item())
+    applied = np.isfinite(scaling_factor) and scaling_factor > 1e-5
+    if applied:
         q_head.apply_change()
         q_head.delete_update()
     else:
         q_head.delete_update()
 
-    return eigenvalues
+    if not np.isfinite(scaling_factor):
+        skip_reason = "tiny_nonfinite_line_search_amplitude"
+    elif candidate_neurons == 0:
+        skip_reason = "tiny_no_candidate_neurons"
+    elif not applied:
+        skip_reason = "tiny_line_search_amplitude_below_threshold"
+    else:
+        skip_reason = None
+
+    return eigenvalues, float(gamma), skip_reason

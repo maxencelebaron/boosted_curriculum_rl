@@ -575,6 +575,12 @@ class GrowthController:
         states, actions, td_targets = replay_batch_to_tensors(
             agent, growth_batch
         )
+        growth_action_counts = (
+            torch.bincount(actions.reshape(-1), minlength=n_actions)
+            .detach()
+            .cpu()
+            .tolist()
+        )
         validation_states, validation_actions, validation_td_targets = (
             replay_batch_to_tensors(agent, validation_batch)
         )
@@ -736,6 +742,9 @@ class GrowthController:
             "hidden_before": int(hidden_before),
             "hidden_after": int(hidden_after),
             "neurons_added": neurons_added,
+            "growth_action_counts": [
+                int(count) for count in growth_action_counts
+            ],
             "skipped": growth_skipped,
             "skip_reason": skip_reason,
             "pre_growth_retry_used": pre_growth_retry_used,

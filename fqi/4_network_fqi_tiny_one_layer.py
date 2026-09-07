@@ -244,7 +244,7 @@ def grow_network_gromo(
             zeros_fan_in=True,
             zeros_fan_out=False,
         )
-        q_head.normalize_optimal_updates(normalization_type="weird_normalization")
+        # q_head.normalize_optimal_updates(normalization_type="weird_normalization")
     eigenvalues = q_head.eigenvalues_extension
 
     dataset = torch.utils.data.TensorDataset(states, td_targets)

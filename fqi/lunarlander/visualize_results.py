@@ -480,7 +480,13 @@ class DQNVisualizer:
         "losses_raw": "losses",
     }
 
-    def __init__(self, reward_window=500, episode_window=50, loss_window=50):
+    def __init__(
+        self,
+        reward_window=500,
+        episode_window=50,
+        loss_window=50,
+        run_id=None,
+    ):
         for name, value in {
             "reward_window": reward_window,
             "episode_window": episode_window,
@@ -536,8 +542,13 @@ class DQNVisualizer:
         self._legacy_metrics_used = set()
         self._reconstructed_evaluation_steps = set()
         self._reconstruction_warnings_emitted = set()
-        self.logs_dir = LOGS_DIR
-        self.output_dir = FIGURES_DIR / "dqn"
+        if run_id is None:
+            self.logs_dir = LOGS_DIR
+            self.output_dir = FIGURES_DIR / "dqn"
+        else:
+            run_name = f"run_{run_id}"
+            self.logs_dir = LOGS_DIR / run_name
+            self.output_dir = FIGURES_DIR / run_name
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.experiments = self._discover_experiments()
         self.shared_growth_steps = self._find_shared_growth_steps()
@@ -1220,15 +1231,28 @@ def parse_args():
         "--loss-window", type=int, default=50,
         help="Moving-average window for per-training-step TD losses",
     )
+    parser.add_argument(
+        "--run-id",
+        help=(
+            "Suffix of a DQN run directory named logs/run_<run-id>; "
+            "figures are saved under figures/run_<run-id>"
+        ),
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    visualizer = FQIVisualizer() if args.algorithm == "fqi" else DQNVisualizer(
-        reward_window=args.reward_window,
-        episode_window=args.episode_window,
-        loss_window=args.loss_window,
-    )
+    if args.algorithm == "fqi":
+        if args.run_id is not None:
+            raise ValueError("--run-id is only supported for DQN experiments")
+        visualizer = FQIVisualizer()
+    else:
+        visualizer = DQNVisualizer(
+            reward_window=args.reward_window,
+            episode_window=args.episode_window,
+            loss_window=args.loss_window,
+            run_id=args.run_id,
+        )
     visualizer.run()
     print(f"Saved figures to {visualizer.output_dir}")

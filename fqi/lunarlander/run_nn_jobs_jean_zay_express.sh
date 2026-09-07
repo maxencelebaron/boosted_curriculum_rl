@@ -50,7 +50,7 @@ else
     --n-eval-points 10 \
     --n-test-episodes 3 \
     --n-growth-events 1 \
-    --grow-batch-size 1024 \
+    --grow-batch-size 512 \
     --n-plasticity-measurements 0 \
     --output-dir "$EXPERIMENT_DIR/debug_growth_loss_$OUTPUT_NAME"
 fi

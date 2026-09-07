@@ -86,7 +86,7 @@ else
     "${NATURAL_GRADIENT_ARG[@]}" \
     --seed "$SEED" \
     --growth-mode "$METHOD" \
-    --grow-batch-size 512 \
+    --grow-batch-size 1024 \
     --pre-growth-steps "$PRE_GROWTH_STEPS" \
     --output-dir "$RUN_DIR/dqn_lunarlander_grow_$OUTPUT_NAME"
 fi

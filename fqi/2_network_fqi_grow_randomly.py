@@ -47,7 +47,7 @@ class DQNNetwork(nn.Module):
         output_shape,
         hidden_size: int,
         first_hidden_size: int = 128,
-        second_hidden_size: int = 128,
+        # second_hidden_size: int = 128,
         **kwargs,
     ):
         del kwargs
@@ -55,15 +55,15 @@ class DQNNetwork(nn.Module):
         self.input_shape = tuple(input_shape)
         self.output_shape = tuple(output_shape)
         self.first_hidden_size = first_hidden_size
-        self.second_hidden_size = second_hidden_size
+        # self.second_hidden_size = second_hidden_size
         self.h1 = nn.Sequential(
             nn.Linear(self.input_shape[0], first_hidden_size),
             nn.ReLU(),
-            nn.Linear(first_hidden_size, second_hidden_size),
-            nn.ReLU(),
+            # nn.Linear(first_hidden_size, second_hidden_size),
+            # nn.ReLU(),
         )
         self.encoder = nn.Sequential(
-            nn.Linear(second_hidden_size, hidden_size),
+            nn.Linear(first_hidden_size, hidden_size),
             nn.ReLU(),
         )
         self.q_head = nn.Linear(hidden_size, self.output_shape[0])
@@ -87,7 +87,7 @@ class DQNNetwork(nn.Module):
             self.output_shape,
             hidden_size=hidden_size,
             first_hidden_size=self.first_hidden_size,
-            second_hidden_size=self.second_hidden_size,
+            # second_hidden_size=self.second_hidden_size,
         )
 
 

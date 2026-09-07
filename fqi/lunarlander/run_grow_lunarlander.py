@@ -88,11 +88,11 @@ class Args:
 
     growth_mode: str = "als"
     """Growth strategy: random, random-0, als, stagewise-als, or gromo_one_layer."""
-    initial_hidden: int = 32
+    initial_hidden: int = 64
     """Initial width of the growable layer."""
-    final_hidden: int = 64
+    final_hidden: int = 128
     """Requested width after the final growth event."""
-    n_growth_events: int = 8
+    n_growth_events: int = 16
     """Number of growth events when curriculum is disabled."""
     growth_start_step: int = 0
     """First growth step without curriculum; zero selects it automatically."""
@@ -117,7 +117,16 @@ class Args:
     """Threshold to consider an eigenvalue as zero in the SVD"""
     statistical_threshold: float = 0.0
     """Threshold to decide how many singular values (number of neurons) to keep"""
-    als_ridge_candidates: tuple[float, ...] = (0.0, 1e-4, 1e-2, 1.0, 10.0)
+    als_ridge_candidates: tuple[float, ...] = (
+        0.0,
+        1e-4,
+        1e-2,
+        1e-1,
+        3e-1,
+        0.5,
+        1.0,
+        10.0,
+    )
     """Ridge coefficients compared by cross-validation for ALS growth."""
     als_ridge_cv_folds: int = 4
     """Number of folds used to select the ALS ridge coefficient."""
@@ -282,6 +291,53 @@ def _replay_batch_from_indices(replay_memory, indices):
         np.array([replay_memory._absorbing[i] for i in indices]),
         np.array([replay_memory._last[i] for i in indices]),
     )
+
+
+def _sample_growth_indices_with_action_quota(
+    replay_memory,
+    batch_size: int,
+    n_actions: int,
+    samples_per_action: int,
+) -> np.ndarray:
+    """Sample a batch with up to ``samples_per_action`` guaranteed per action."""
+    if n_actions * samples_per_action > batch_size:
+        raise ValueError(
+            "The requested per-action quota does not fit in grow_batch_size."
+        )
+
+    all_indices = np.arange(replay_memory.size)
+    replay_actions = np.array([
+        int(np.asarray(replay_memory._actions[index]).reshape(-1)[0])
+        for index in all_indices
+    ])
+
+    selected_parts = []
+    for action in range(n_actions):
+        action_indices = all_indices[replay_actions == action]
+        n_selected = min(samples_per_action, action_indices.size)
+        selected_parts.append(np.random.choice(
+            action_indices,
+            size=n_selected,
+            replace=False,
+        ))
+
+    selected_indices = np.concatenate(selected_parts)
+    available_mask = np.ones(replay_memory.size, dtype=bool)
+    available_mask[selected_indices] = False
+    available_indices = all_indices[available_mask]
+    n_to_complete = batch_size - selected_indices.size
+    if n_to_complete:
+        selected_indices = np.concatenate((
+            selected_indices,
+            np.random.choice(
+                available_indices,
+                size=n_to_complete,
+                replace=False,
+            ),
+        ))
+
+    np.random.shuffle(selected_indices)
+    return selected_indices
 
 
 def _save_growth_results(log_dir, seed, controller: GrowthController):
@@ -479,7 +535,14 @@ class GrowthController:
         online = agent.approximator.model
         network = online.network
         hidden_before = network.encoder_size
-        neurons_to_add = max(0, target_width - hidden_before)
+        previous_target_width = (
+            self.args.initial_hidden
+            if self.next_event == 0
+            else self.target_widths[self.next_event - 1]
+        )
+        # Request only this event's scheduled increment. A skipped event is
+        # not caught up by requesting more neurons at the following event.
+        neurons_to_add = target_width - previous_target_width
         batch_size = self.args.grow_batch_size
         replay_memory = agent._replay_memory
         if replay_memory.size < 2 * batch_size:
@@ -487,15 +550,27 @@ class GrowthController:
                 "The replay memory must contain at least twice "
                 "grow_batch_size to build disjoint growth and validation "
                 "batches."
-            )
-        sampled_indices = np.random.choice(
-            replay_memory.size, size=2 * batch_size, replace=False
+        )
+        n_actions = network.q_head.out_features
+        growth_indices = _sample_growth_indices_with_action_quota(
+            replay_memory,
+            batch_size,
+            n_actions,
+            samples_per_action=5 * neurons_to_add,
+        )
+
+        available_mask = np.ones(replay_memory.size, dtype=bool)
+        available_mask[growth_indices] = False
+        validation_indices = np.random.choice(
+            np.arange(replay_memory.size)[available_mask],
+            size=batch_size,
+            replace=False,
         )
         growth_batch = _replay_batch_from_indices(
-            replay_memory, sampled_indices[:batch_size]
+            replay_memory, growth_indices
         )
         validation_batch = _replay_batch_from_indices(
-            replay_memory, sampled_indices[batch_size:]
+            replay_memory, validation_indices
         )
         states, actions, td_targets = replay_batch_to_tensors(
             agent, growth_batch

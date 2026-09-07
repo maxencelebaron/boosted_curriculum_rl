@@ -42,10 +42,10 @@ class DQNNetwork(nn.Module):
             nn.ReLU(),
             nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
+            # nn.Linear(128, 64),
+            # nn.ReLU(),
         )
-        self.q_head = nn.Linear(64, output_shape[0])
+        self.q_head = nn.Linear(128, output_shape[0])
 
     @property
     def encoder_size(self):

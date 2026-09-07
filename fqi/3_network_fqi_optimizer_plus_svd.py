@@ -52,7 +52,7 @@ class DQNNetwork(nn.Module):
         output_shape,
         hidden_size: int,
         first_hidden_size: int = 128,
-        second_hidden_size: int = 128,
+        # second_hidden_size: int = 128,
         **kwargs,
     ):
         del kwargs
@@ -60,15 +60,15 @@ class DQNNetwork(nn.Module):
         self.input_shape = tuple(input_shape)
         self.output_shape = tuple(output_shape)
         self.first_hidden_size = first_hidden_size
-        self.second_hidden_size = second_hidden_size
+        # self.second_hidden_size = second_hidden_size
         self.h1 = nn.Sequential(
             nn.Linear(self.input_shape[0], first_hidden_size),
             nn.ReLU(),
-            nn.Linear(first_hidden_size, second_hidden_size),
-            nn.ReLU(),
+            # nn.Linear(first_hidden_size, second_hidden_size),
+            # nn.ReLU(),
         )
         self.encoder = nn.Sequential(
-            nn.Linear(second_hidden_size, hidden_size),
+            nn.Linear(first_hidden_size, hidden_size),
             ReLUDerivativeOneAtZeroFunctorch(),
         )
         self.q_head = nn.Linear(hidden_size, self.output_shape[0])
@@ -92,7 +92,7 @@ class DQNNetwork(nn.Module):
             self.output_shape,
             hidden_size=hidden_size,
             first_hidden_size=self.first_hidden_size,
-            second_hidden_size=self.second_hidden_size,
+            # second_hidden_size=self.second_hidden_size,
         )
 
 
@@ -667,12 +667,13 @@ def grow_network_als(
             amplitude_reduction,
             amplitude_max_iter,
         )
-        if amplitude > 0:
-            factor_scale = math.sqrt(amplitude)
+        factor_scale = math.sqrt(amplitude)
+        if factor_scale > 1e-5:
             Omega_final = factor_scale * Omega_final
             A_final = factor_scale * A_final
             retained = amplitude * retained
         else:
+            amplitude = 0.0
             added_neurons = 0
             Omega_final = Omega_final[:, :0]
             A_final = A_final[:, :0]

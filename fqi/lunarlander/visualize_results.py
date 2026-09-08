@@ -349,7 +349,7 @@ class DQNFileIndex:
 
     FILE_PATTERN = re.compile(r"(.+)-(\d+)\.npy")
 
-    def __init__(self, directory):
+    def __init__(self, directory, seeds=None):
         self.directory = directory
         self.files = {}
         for path in directory.glob("*.npy"):
@@ -357,6 +357,8 @@ class DQNFileIndex:
             if match is None:
                 continue
             metric, seed = match.groups()
+            if seeds is not None and int(seed) not in seeds:
+                continue
             canonical_metric = metric.replace("-", "_")
             self.files.setdefault(canonical_metric, {})[int(seed)] = path
 
@@ -396,6 +398,10 @@ class DQNVisualizer:
     GROWTH_PREFIX = "dqn_lunarlander_grow_"
     KNOWN_COLORS = {
         "baseline": "C3",
+        "DQN": "C3",
+        "B-DQN": "C6",
+        "BC-DQN": "C7",
+        "C-DQN": "C8",
         "random": "C0",
         "random-0": "C1",
         "als": "C2",
@@ -603,6 +609,34 @@ class DQNVisualizer:
                 for seed in index.all_seeds
                 if (directory / f"config-{seed}.yaml").exists()
             }
+            if not is_growth:
+                groups = {}
+                for seed in index.all_seeds:
+                    config = configs.get(seed, {})
+                    condition = (
+                        bool(config.get("use_boosting", False)),
+                        bool(config.get("use_curriculum", False)),
+                    )
+                    groups.setdefault(condition, set()).add(seed)
+                labels = {
+                    (False, False): "DQN",
+                    (True, False): "B-DQN",
+                    (True, True): "BC-DQN",
+                    (False, True): "C-DQN",
+                }
+                for condition, seeds in groups.items():
+                    label = labels[condition]
+                    experiments.append(DQNExperiment(
+                        directory=directory,
+                        key=label,
+                        label=label,
+                        color=self._color_for(label),
+                        is_growth=False,
+                        index=DQNFileIndex(directory, seeds=seeds),
+                        configs={seed: configs[seed] for seed in seeds
+                                 if seed in configs},
+                    ))
+                continue
             configured_modes = {
                 config.get("growth_mode") for config in configs.values()
                 if config.get("growth_mode")
@@ -1060,6 +1094,89 @@ class DQNVisualizer:
                 legend_columns=1,
             )
 
+    def _parameter_performance_curve(self, experiment, seed):
+        """Last evaluation at each observed parameter count (LunarLander MLPs)."""
+        config = experiment.configs.get(seed)
+        if config is None:
+            raise ValueError("missing configuration for parameter counting")
+        steps = np.asarray(experiment.index.load("evaluation_steps", seed))
+        returns = np.asarray(experiment.index.load("J", seed))
+        if steps.ndim != 1 or returns.shape != steps.shape or not len(steps):
+            raise ValueError("invalid evaluation arrays")
+        if not np.all(np.isfinite(returns)) or np.any(np.diff(steps) <= 0):
+            raise ValueError("invalid returns or evaluation step ordering")
+
+        # Count weights and biases of 8 -> first -> hidden -> 4.
+        # Target networks and temporary growth/optimizer tensors are excluded.
+        def mlp_parameters(first, hidden):
+            return 9 * first + (first + 1) * hidden + 4 * (hidden + 1)
+
+        if experiment.is_growth:
+            events = self._growth_events_for_seed(experiment, seed)
+            if events is None:
+                raise ValueError("missing growth events for parameter counting")
+            first = int(config.get("first_hidden_size", 128))
+            widths = np.full(steps.shape, int(config.get("initial_hidden", 64)))
+            for event in sorted(events, key=lambda event: event["actual_step"]):
+                # Growth runs before evaluation, including at the same step.
+                widths[steps >= event["actual_step"]] = int(event["hidden_after"])
+            counts = mlp_parameters(first, widths)
+        else:
+            tasks = np.asarray(experiment.index.load("evaluation_task_indices", seed))
+            if tasks.shape != steps.shape or np.any(tasks < 0):
+                raise ValueError("invalid evaluation task indices")
+            hidden = int(config.get("hidden_size", 128))
+            # Each task activates one more residual network, including frozen ones.
+            counts = (tasks + 1) * mlp_parameters(hidden, hidden)
+
+        if np.any(np.diff(counts) < 0):
+            raise ValueError("parameter counts must not decrease")
+        last = np.r_[counts[1:] != counts[:-1], True]
+        return counts[last], returns[last]
+
+    def plot_parameter_performance(self):
+        """Compare final evaluation per size, only when boosting is present."""
+        boosting_keys = {"B-DQN", "BC-DQN"}
+        if not any(experiment.key in boosting_keys for experiment in self.experiments):
+            return
+        metric = next(metric for metric in self.metrics if metric.values == "J")
+        figure, ax = plt.subplots(figsize=(10, 4.5))
+        plotted = False
+        for experiment in self.experiments:
+            if not experiment.is_growth and experiment.key not in boosting_keys:
+                continue
+            curves = []
+            for seed in experiment.seeds:
+                try:
+                    curves.append(self._parameter_performance_curve(experiment, seed))
+                except (KeyError, ValueError, TypeError, OSError) as error:
+                    warnings.warn(
+                        f"WARNING: {experiment.label} seed {seed}: "
+                        f"parameter performance skipped: {error}"
+                    )
+            if not curves:
+                continue
+            aligned = self._align_curves(curves, False)
+            if aligned is None:
+                warnings.warn(
+                    f"WARNING: {experiment.label}: no common parameter counts "
+                    "across seeds; parameter performance skipped"
+                )
+                continue
+            self._plot_mean_and_std(ax, *aligned, experiment)
+            ax.scatter(aligned[0], aligned[1].mean(axis=0),
+                       color=experiment.color, s=22, zorder=3)
+            plotted = True
+        if plotted:
+            finish_figure(
+                figure, ax, self.output_dir / "dqn_evaluation_by_parameters.pdf",
+                "Number of parameters", metric.ylabel,
+                "DQN evaluation performance (last evaluation per model size)",
+                legend_columns=1,
+            )
+        else:
+            plt.close(figure)
+
     def plot_architecture_evolution(self):
         width_figure, width_ax = plt.subplots(figsize=(10, 4.5))
         neurons_figure, neurons_ax = plt.subplots(figsize=(10, 4.5))
@@ -1204,6 +1321,7 @@ class DQNVisualizer:
             if experiment.is_growth:
                 self.plot_generation_metrics(experiment)
         self.plot_architecture_evolution()
+        self.plot_parameter_performance()
 
 
 def parse_args():

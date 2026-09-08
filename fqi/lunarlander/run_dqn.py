@@ -28,6 +28,8 @@ torch.set_num_threads(1)
 class Args:
     use_curriculum: bool = False
     """Train successively on increasing wind powers."""
+    hidden_size: int = 128
+    """Width of both hidden layers in each Q-network."""
     use_boosting: bool = False
     """Add one residual Q-network at each task."""
     seed: int = 95
@@ -202,6 +204,7 @@ def train_dqn(seed, log_dir, args):
     }
     approximator_params = dict(
         network=DQNNetwork,
+        hidden_size=args.hidden_size,
         input_shape=mdps[0].info.observation_space.shape,
         output_shape=(mdps[0].info.action_space.n,),
         n_actions=mdps[0].info.action_space.n,

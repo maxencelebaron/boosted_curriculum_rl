@@ -34,18 +34,18 @@ class Q_Network(nn.Module):
 class DQNNetwork(nn.Module):
     """LunarLander network compatible with MushroomRL TorchApproximator."""
 
-    def __init__(self, input_shape, output_shape, **kwargs):
+    def __init__(self, input_shape, output_shape, hidden_size=128, **kwargs):
         del kwargs
         super().__init__()
         self.encoder = nn.Sequential(
-            nn.Linear(input_shape[0], 128),
+            nn.Linear(input_shape[0], hidden_size),
             nn.ReLU(),
-            nn.Linear(128, 128),
+            nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
             # nn.Linear(128, 64),
             # nn.ReLU(),
         )
-        self.q_head = nn.Linear(128, output_shape[0])
+        self.q_head = nn.Linear(hidden_size, output_shape[0])
 
     @property
     def encoder_size(self):

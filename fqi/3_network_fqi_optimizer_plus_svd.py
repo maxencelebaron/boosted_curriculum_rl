@@ -303,18 +303,40 @@ def _update_Omega(
 
 def _residual_loss(
     X: torch.Tensor,
+    intercept: torch.Tensor,
     features: torch.Tensor,
     actions: torch.Tensor,
     residuals: torch.Tensor,
 ) -> torch.Tensor:
-    predictions = (X[actions] * features).sum(dim=1)
+    predictions = (
+        (X[actions] * features).sum(dim=1) + intercept[actions]
+    )
     return (residuals - predictions).square().mean()
+
+
+def _update_intercept(
+    X: torch.Tensor,
+    features: torch.Tensor,
+    actions: torch.Tensor,
+    residuals: torch.Tensor,
+    n_actions: int,
+) -> torch.Tensor:
+    """Return the unpenalized least-squares intercept for each action."""
+    slope_predictions = (X[actions] * features).sum(dim=1)
+    unexplained = residuals - slope_predictions
+    intercept = residuals.new_zeros(n_actions)
+    counts = torch.bincount(actions, minlength=n_actions)
+    intercept.index_add_(0, actions, unexplained)
+    observed = counts > 0
+    intercept[observed] /= counts[observed].to(intercept.dtype)
+    return intercept
 
 
 @torch.no_grad()
 def _als_amplitude_line_search(
     Omega: torch.Tensor,
     A: torch.Tensor,
+    intercept: torch.Tensor,
     features: torch.Tensor,
     actions: torch.Tensor,
     residuals: torch.Tensor,
@@ -327,7 +349,7 @@ def _als_amplitude_line_search(
     projected_features = features @ A
     linearized_correction = (
         Omega[actions] * projected_features
-    ).sum(dim=1)
+    ).sum(dim=1) + intercept[actions]
     directional_derivative = -2.0 * (
         residuals * linearized_correction
     ).mean()
@@ -353,7 +375,7 @@ def _als_amplitude_line_search(
         )
         actual_correction = (
             sqrt_amplitude * Omega[actions] * activated_features
-        ).sum(dim=1)
+        ).sum(dim=1) + amplitude * intercept[actions]
         candidate_loss = (
             residuals - actual_correction
         ).square().mean()
@@ -384,11 +406,16 @@ def _run_als(
     min_relative_loss_improvement: float = 1e-6,
     ridge: float = 0.0,
     Omega_init: torch.Tensor | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Fit a rank-constrained residual operator by alternating LS."""
+    zero_X = features.new_zeros((n_actions, features.shape[1]))
+    intercept = _update_intercept(
+        zero_X, features, actions, residuals, n_actions
+    )
     if Omega_init is None:
         spectral_matrix = _apply_H_adjoint(
-            residuals / math.sqrt(features.shape[0]),
+            (residuals - intercept[actions])
+            / math.sqrt(features.shape[0]),
             features,
             actions,
             n_actions,
@@ -408,12 +435,19 @@ def _run_als(
     previous_loss = None
     A = features.new_zeros((features.shape[1], rank))
     for _ in range(max_iter):
-        A = _update_A(Omega, features, actions, residuals, ridge)
+        centered_residuals = residuals - intercept[actions]
+        A = _update_A(
+            Omega, features, actions, centered_residuals, ridge
+        )
         Omega = _update_Omega(
-            A, features, actions, residuals, n_actions, ridge
+            A, features, actions, centered_residuals, n_actions, ridge
+        )
+        X = Omega @ A.T
+        intercept = _update_intercept(
+            X, features, actions, residuals, n_actions
         )
         loss = _residual_loss(
-            Omega @ A.T, features, actions, residuals
+            X, intercept, features, actions, residuals
         )
         if previous_loss is not None:
             scale = max(abs(previous_loss), torch.finfo(loss.dtype).eps)
@@ -425,7 +459,7 @@ def _run_als(
                 break
         previous_loss = loss.item()
 
-    return Omega, A
+    return Omega, A, intercept
 
 
 def _project_rank(X: torch.Tensor, rank: int) -> torch.Tensor:
@@ -435,6 +469,7 @@ def _project_rank(X: torch.Tensor, rank: int) -> torch.Tensor:
 
 def _backtracking_line_search(
     X: torch.Tensor,
+    intercept: torch.Tensor,
     gradient: torch.Tensor,
     rank: int,
     features: torch.Tensor,
@@ -446,13 +481,15 @@ def _backtracking_line_search(
     max_iter: int = 20,
 ) -> tuple[float, torch.Tensor]:
     """Return an Armijo step size and its projected candidate."""
-    current_loss = _residual_loss(X, features, actions, residuals)
+    current_loss = _residual_loss(
+        X, intercept, features, actions, residuals
+    )
     step = initial_step
     candidate = X
     for _ in range(max_iter):
         candidate = _project_rank(X - step * gradient, rank)
         candidate_loss = _residual_loss(
-            candidate, features, actions, residuals
+            candidate, intercept, features, actions, residuals
         )
         projected_displacement = candidate - X
         directional_derivative = (
@@ -486,14 +523,19 @@ def _run_stagewise_als(
     line_search_armijo_alpha: float = 0.1,
     line_search_reduction: float = 0.5,
     line_search_max_iter: int = 20,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Fit the residual operator one rank at a time."""
     X = features.new_zeros((n_actions, features.shape[1]))
     Omega = features.new_zeros((n_actions, 0))  # le 0 pour Omega et A représente la première valeur prise dans la boucle sur le rang
     A = features.new_zeros((features.shape[1], 0))
-    scaled_residuals = residuals / math.sqrt(features.shape[0])
+    intercept = _update_intercept(
+        X, features, actions, residuals, n_actions
+    )
 
     for current_rank in range(1, rank + 1):
+        scaled_residuals = (
+            residuals - intercept[actions]
+        ) / math.sqrt(features.shape[0])
         gradient = 2.0 * _apply_H_adjoint(
             _apply_H(X, features, actions) - scaled_residuals,
             features,
@@ -502,6 +544,7 @@ def _run_stagewise_als(
         )
         step, candidate = _backtracking_line_search(
             X,
+            intercept,
             gradient,
             current_rank,
             features,
@@ -519,7 +562,7 @@ def _run_stagewise_als(
             U[:, :current_rank]
             * singular_values[:current_rank].sqrt()
         )
-        Omega, A = _run_als(
+        Omega, A, intercept = _run_als(
             features,
             actions,
             residuals,
@@ -532,7 +575,7 @@ def _run_stagewise_als(
         )
         X = Omega @ A.T
 
-    return Omega, A
+    return Omega, A, intercept
 
 
 def grow_network_als(
@@ -607,9 +650,17 @@ def grow_network_als(
     if torch.any((actions < 0) | (actions >= n_actions)):
         raise ValueError(f"action indices must belong to [0, {n_actions - 1}]")
 
-    features = torch.cat(
-        (fixed_features, fixed_features.new_ones((n_samples, 1))), dim=1
+    feature_mean = fixed_features.mean(dim=0)
+    feature_std = fixed_features.std(dim=0, unbiased=False)
+    feature_scale = torch.where(
+        feature_std > torch.finfo(dtype).eps,
+        feature_std,
+        torch.ones_like(feature_std),
     )
+    standardized_features = (
+        fixed_features - feature_mean
+    ) / feature_scale
+    features = standardized_features
     residuals = td_targets - q_values.gather(
         1, actions[:, None]
     ).squeeze(1)
@@ -618,8 +669,9 @@ def grow_network_als(
 
     if max_rank == 0:
         X = features.new_zeros((n_actions, features.shape[1]))
+        intercept = features.new_zeros(n_actions)
     elif method == "als":
-        Omega, A = _run_als(
+        Omega, A, intercept = _run_als(
             features,
             actions,
             residuals,
@@ -631,7 +683,7 @@ def grow_network_als(
         )
         X = Omega @ A.T
     else:
-        Omega, A = _run_stagewise_als(
+        Omega, A, intercept = _run_stagewise_als(
             features,
             actions,
             residuals,
@@ -659,6 +711,7 @@ def grow_network_als(
         amplitude = _als_amplitude_line_search(
             Omega_final,
             A_final,
+            intercept,
             features,
             actions,
             residuals,
@@ -671,13 +724,31 @@ def grow_network_als(
         if factor_scale > 1e-5:
             Omega_final = factor_scale * Omega_final
             A_final = factor_scale * A_final
+            intercept = amplitude * intercept
             retained = amplitude * retained
         else:
             amplitude = 0.0
             added_neurons = 0
             Omega_final = Omega_final[:, :0]
             A_final = A_final[:, :0]
+            intercept = torch.zeros_like(intercept)
             retained = retained[:0]
+    else:
+        # The intercept belongs to the proposed growth correction. Do not
+        # modify the existing Q-head when no neuron survives rank selection.
+        intercept = torch.zeros_like(intercept)
+
+    if added_neurons:
+        # Convert the factor learned with standardized features back to the
+        # original h1 coordinates while preserving every pre-activation:
+        # ((b - mean) / scale) @ W_std
+        # == b @ W + bias.
+        A_weights = A_final / feature_scale[:, None]
+        A_bias = -feature_mean @ A_weights
+        A_final = torch.cat((A_weights, A_bias[None, :]), dim=0)
+        retained = torch.linalg.svdvals(
+            Omega_final @ A_final.T
+        )[:added_neurons]
 
     if hasattr(old_net, "new_with_hidden_size"):
         new_net = old_net.new_with_hidden_size(old_h + added_neurons)
@@ -690,7 +761,7 @@ def grow_network_als(
         new_net.encoder[0].weight[:old_h].copy_(old_net.encoder[0].weight)
         new_net.encoder[0].bias[:old_h].copy_(old_net.encoder[0].bias)
         new_net.q_head.weight[:, :old_h].copy_(old_net.q_head.weight)
-        new_net.q_head.bias.copy_(old_net.q_head.bias)
+        new_net.q_head.bias.copy_(old_net.q_head.bias + intercept)
         if added_neurons:
             new_net.encoder[0].weight[old_h:].copy_(A_final[:-1].T)
             new_net.encoder[0].bias[old_h:].copy_(A_final[-1])

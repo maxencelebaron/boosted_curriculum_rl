@@ -88,6 +88,8 @@ class Args:
 
     growth_mode: str = "als"
     """Growth strategy: random, random-0, als, stagewise-als, or gromo_one_layer."""
+    first_hidden_size: int = 128
+    """Width of the first hidden layer."""
     initial_hidden: int = 64
     """Initial width of the growable layer."""
     final_hidden: int = 128
@@ -840,6 +842,7 @@ def experiment(args: Args):
         "output_shape": (mdps[0].info.action_space.n,),
         "n_actions": mdps[0].info.action_space.n,
         "hidden_size": args.initial_hidden,
+        "first_hidden_size": args.first_hidden_size,
         "loss": F.mse_loss,
         "optimizer": optimizer,
         "use_cuda": args.use_cuda,

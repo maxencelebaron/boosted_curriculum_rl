@@ -52,6 +52,8 @@ GROWTH_MODULES = {
 class Args:
     use_curriculum: bool = False
     """Train successively on increasing wind powers."""
+    curriculum_growth_at_three_quarters: bool = False
+    """Add growth at three quarters of each curriculum task, besides midpoints and transitions."""
     seed: int = 95
     """Random seed of the experiment."""
     n_timesteps: int = 1_500_000
@@ -165,6 +167,8 @@ def _growth_schedule(args: Args, task_steps: list[int]) -> list[int]:
             if task_index > 0:
                 steps.append(task_start)
             steps.append(task_start + n_steps_task // 2)
+            if args.curriculum_growth_at_three_quarters:
+                steps.append(task_start + 3 * n_steps_task // 4)
             task_start += n_steps_task
         return steps
 
@@ -217,11 +221,11 @@ def _validate_args(args: Args, task_steps: list[int]):
         )
 
     expected_events = (
-        2 * len(task_steps) - 1
+        (2 + int(args.curriculum_growth_at_three_quarters)) * len(task_steps) - 1
         if args.use_curriculum
         else args.n_growth_events
     )
-    if len(schedule) != expected_events:
+    if len(schedule) != expected_events or np.any(np.diff(schedule) <= 0):
         raise ValueError("growth steps must be distinct")
     if schedule and schedule[-1] > args.n_timesteps:
         raise ValueError("growth steps must remain within training")

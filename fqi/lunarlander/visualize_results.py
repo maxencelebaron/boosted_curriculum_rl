@@ -581,9 +581,15 @@ class DQNVisualizer:
 
     def _discover_experiments(self):
         candidates = []
-        baseline = self.logs_dir / self.BASELINE_FOLDER
-        if baseline.is_dir():
-            candidates.append((baseline, "baseline", False))
+        baseline_folders = (
+            self.BASELINE_FOLDER,
+            "dqn_lunarlander_curriculum",
+            "dqn_lunarlander_boosted_curriculum",
+        )
+        for folder in baseline_folders:
+            baseline = self.logs_dir / folder
+            if baseline.is_dir():
+                candidates.append((baseline, "baseline", False))
         for directory in sorted(self.logs_dir.glob(f"{self.GROWTH_PREFIX}*")):
             if directory.is_dir():
                 candidates.append((
@@ -593,7 +599,7 @@ class DQNVisualizer:
                 ))
         if not candidates:
             raise FileNotFoundError(
-                f"No DQN directory matching {self.BASELINE_FOLDER} or "
+                f"No DQN directory matching {baseline_folders} or "
                 f"{self.GROWTH_PREFIX}* in {self.logs_dir}"
             )
 

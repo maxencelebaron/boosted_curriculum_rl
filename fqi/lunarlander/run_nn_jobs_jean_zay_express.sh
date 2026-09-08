@@ -18,8 +18,6 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
   set -e
   SCRIPT_PATH=$(readlink -f "$0")
   mkdir -p slurm/logs
-  # Share one result directory across both arrays.
-  export RUN_NAME=${RUN_NAME:-run_curriculum_$(date +%Y%m%d_%H%M%S)_$$}
 
   echo "Submitting method group 1/2..."
   sbatch --wait --export=ALL,METHOD_GROUP=1 "$SCRIPT_PATH"
@@ -75,7 +73,10 @@ echo "Run: $RUN_NAME | Group: $METHOD_GROUP | Method: $METHOD | Seed: $SEED"
 if [ "$METHOD" = "baseline" ]; then
   python run_dqn.py \
     --use-curriculum \
-    --hidden-size 64 \
+    --wind-powers 1 2 5 \
+    --n-timesteps 2100000 \
+    --curriculum-initial-eps 0.2 \
+    --hidden-size 128 \
     --use-cuda \
     --seed "$SEED" \
     --output-dir "$RUN_DIR/dqn_lunarlander"
@@ -89,9 +90,12 @@ else
 
   python run_grow_lunarlander.py \
     --use-curriculum \
+    --wind-powers 1 2 5 \
+    --n-timesteps 2100000 \
+    --curriculum-initial-eps 0.2 \
     --curriculum-growth-at-three-quarters \
     --first-hidden-size 128 \
-    --initial-hidden 62 \
+    --initial-hidden 80 \
     --final-hidden 128 \
     --use-cuda \
     "${NATURAL_GRADIENT_ARG[@]}" \

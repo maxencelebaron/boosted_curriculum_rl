@@ -44,6 +44,8 @@ class Args:
     """Number of environment steps between training calls."""
     gradient_steps: int = 1
     """Number of gradient updates per training call."""
+    curriculum_initial_eps: float = 0.2
+    """Initial epsilon after the first curriculum task; the first starts at 1."""
     exploration_fraction: float = 0.3
     """Fraction of training over which epsilon is annealed."""
     exploration_final_eps: float = 0.01
@@ -138,6 +140,12 @@ def _validate_args(args, n_tasks):
         raise ValueError("exploration_fraction must be in [0, 1]")
     if not 0.0 < args.exploration_final_eps <= 1.0:
         raise ValueError("exploration_final_eps must be in (0, 1]")
+    if args.use_curriculum and not (
+        args.exploration_final_eps <= args.curriculum_initial_eps <= 1.0
+    ):
+        raise ValueError(
+            "curriculum_initial_eps must be between exploration_final_eps and 1"
+        )
 
     shortest_task = min(_split_budget(args.n_timesteps, n_tasks))
     if args.learning_starts >= shortest_task:
@@ -270,7 +278,8 @@ def train_dqn(seed, log_dir, args):
                 1, int(n_steps_task * args.exploration_fraction)
             )
             epsilon = LinearParameter(
-                value=1.0,
+                value=(args.curriculum_initial_eps
+                       if args.use_curriculum and task_index > 0 else 1.0),
                 threshold_value=args.exploration_final_eps,
                 n=n_explore,
             )

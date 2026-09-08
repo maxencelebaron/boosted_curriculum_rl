@@ -66,6 +66,8 @@ class Args:
     """Environment steps between DQN updates."""
     gradient_steps: int = 1
     """Adam updates per DQN training call."""
+    curriculum_initial_eps: float = 0.2
+    """Initial epsilon after the first curriculum task; the first starts at 1."""
     exploration_fraction: float = 0.3
     """Fraction of training over which epsilon decreases linearly."""
     exploration_final_eps: float = 0.01
@@ -213,6 +215,12 @@ def _validate_args(args: Args, task_steps: list[int]):
         raise ValueError("grow_batch_size must be positive")
     if not 0.0 < args.exploration_final_eps <= 1.0:
         raise ValueError("exploration_final_eps must be in (0, 1]")
+    if args.use_curriculum and not (
+        args.exploration_final_eps <= args.curriculum_initial_eps <= 1.0
+    ):
+        raise ValueError(
+            "curriculum_initial_eps must be between exploration_final_eps and 1"
+        )
     if args.kfac_retry_damping_multiplier <= 1.0:
         raise ValueError("kfac_retry_damping_multiplier must be greater than 1")
     if not 0.0 < args.kfac_retry_step_size_multiplier < 1.0:
@@ -893,7 +901,8 @@ def experiment(args: Args):
                 1, int(n_steps_task * args.exploration_fraction)
             )
             epsilon = LinearParameter(
-                value=1.0,
+                value=(args.curriculum_initial_eps
+                       if args.use_curriculum and task_index > 0 else 1.0),
                 threshold_value=args.exploration_final_eps,
                 n=n_explore,
             )

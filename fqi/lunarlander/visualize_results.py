@@ -940,11 +940,59 @@ class DQNVisualizer:
         )
 
     def _add_shared_growth_markers(self, ax):
+        self._add_boosting_regions(ax)
         for step in self.shared_growth_steps:
             ax.axvline(
                 step, color="indigo", linestyle="--", linewidth=0.8,
                 alpha=0.65, zorder=0,
             )
+
+    def _add_boosting_regions(self, ax):
+        """Shade active-ensemble phases using recorded training boundaries."""
+        schedules = []
+        for experiment in self.experiments:
+            if experiment.is_growth or experiment.key not in {"B-DQN", "BC-DQN"}:
+                continue
+            for seed in experiment.seeds:
+                try:
+                    boundaries = np.asarray(
+                        experiment.index.load("task_boundaries", seed), dtype=float
+                    )
+                    if (boundaries.ndim != 1 or len(boundaries) < 2
+                            or boundaries[0] != 0
+                            or not np.all(np.isfinite(boundaries))
+                            or np.any(np.diff(boundaries) <= 0)):
+                        raise ValueError("invalid task boundaries")
+                    schedules.append(boundaries)
+                except (KeyError, ValueError, OSError) as error:
+                    warnings.warn(
+                        f"WARNING: {experiment.label} seed {seed}: "
+                        f"boosting regions unavailable: {error}"
+                    )
+                    return
+        if not schedules:
+            return
+        boundaries = schedules[0]
+        if not all(np.array_equal(boundaries, other) for other in schedules[1:]):
+            warnings.warn(
+                "WARNING: boosting boundaries differ between methods or seeds; "
+                "shared boosting regions will not be drawn"
+            )
+            return
+        xlim = ax.get_xlim()
+        n_phases = len(boundaries) - 1
+        # Match CarOnHill's black alpha 0.4 -> 0.0 on white. Use opaque
+        # grays so LunarLander's gray axes background cannot darken them.
+        shades = np.linspace(0.6, 1.0, n_phases)
+        for phase, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:])):
+            ax.axvspan(
+                start, end, color=str(shades[phase]),
+                linewidth=0, zorder=-2,
+            )
+        for step in boundaries[1:-1]:
+            ax.axvline(step, color="#555555", linestyle="-",
+                       linewidth=0.65, alpha=0.5, zorder=0)
+        ax.set_xlim(xlim)
 
     def plot_metric(self, metric):
         self._legacy_metrics_used.discard(metric.values)
@@ -1095,7 +1143,7 @@ class DQNVisualizer:
             )
 
     def _parameter_performance_curve(self, experiment, seed):
-        """Last evaluation at each observed parameter count (LunarLander MLPs)."""
+        """Last evaluation per growth/boosting phase, retaining rejected events."""
         config = experiment.configs.get(seed)
         if config is None:
             raise ValueError("missing configuration for parameter counting")
@@ -1117,9 +1165,13 @@ class DQNVisualizer:
                 raise ValueError("missing growth events for parameter counting")
             first = int(config.get("first_hidden_size", 128))
             widths = np.full(steps.shape, int(config.get("initial_hidden", 64)))
-            for event in sorted(events, key=lambda event: event["actual_step"]):
+            phases = np.zeros(steps.shape, dtype=int)
+            for phase, event in enumerate(
+                sorted(events, key=lambda event: event["actual_step"]), start=1
+            ):
                 # Growth runs before evaluation, including at the same step.
                 widths[steps >= event["actual_step"]] = int(event["hidden_after"])
+                phases[steps >= event["actual_step"]] = phase
             counts = mlp_parameters(first, widths)
         else:
             tasks = np.asarray(experiment.index.load("evaluation_task_indices", seed))
@@ -1128,14 +1180,15 @@ class DQNVisualizer:
             hidden = int(config.get("hidden_size", 128))
             # Each task activates one more residual network, including frozen ones.
             counts = (tasks + 1) * mlp_parameters(hidden, hidden)
+            phases = tasks
 
         if np.any(np.diff(counts) < 0):
             raise ValueError("parameter counts must not decrease")
-        last = np.r_[counts[1:] != counts[:-1], True]
-        return counts[last], returns[last]
+        last = np.r_[phases[1:] != phases[:-1], True]
+        return counts[last], returns[last], phases[last]
 
     def plot_parameter_performance(self):
-        """Compare final evaluation per size, only when boosting is present."""
+        """Compare final evaluation per phase, only when boosting is present."""
         boosting_keys = {"B-DQN", "BC-DQN"}
         if not any(experiment.key in boosting_keys for experiment in self.experiments):
             return
@@ -1156,22 +1209,34 @@ class DQNVisualizer:
                     )
             if not curves:
                 continue
-            aligned = self._align_curves(curves, False)
-            if aligned is None:
+            # Align by phase, not by parameter count: rejected growth can
+            # leave different seeds at different sizes during the same phase.
+            common_phases = curves[0][2]
+            for _, _, phases in curves[1:]:
+                common_phases = np.intersect1d(common_phases, phases)
+            if not len(common_phases):
                 warnings.warn(
-                    f"WARNING: {experiment.label}: no common parameter counts "
-                    "across seeds; parameter performance skipped"
+                    f"WARNING: {experiment.label}: no common evaluation phases; "
+                    "parameter performance skipped"
                 )
                 continue
-            self._plot_mean_and_std(ax, *aligned, experiment)
-            ax.scatter(aligned[0], aligned[1].mean(axis=0),
+            positions = [np.searchsorted(phases, common_phases)
+                         for _, _, phases in curves]
+            mean_parameters = np.stack([
+                x[indices] for (x, _, _), indices in zip(curves, positions)
+            ]).mean(axis=0)
+            values = np.stack([
+                y[indices] for (_, y, _), indices in zip(curves, positions)
+            ])
+            self._plot_mean_and_std(ax, mean_parameters, values, experiment)
+            ax.scatter(mean_parameters, values.mean(axis=0),
                        color=experiment.color, s=22, zorder=3)
             plotted = True
         if plotted:
             finish_figure(
                 figure, ax, self.output_dir / "dqn_evaluation_by_parameters.pdf",
-                "Number of parameters", metric.ylabel,
-                "DQN evaluation performance (last evaluation per model size)",
+                "Mean number of parameters", metric.ylabel,
+                "DQN evaluation performance (last evaluation per phase)",
                 legend_columns=1,
             )
         else:

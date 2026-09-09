@@ -11,21 +11,23 @@
 #SBATCH --array=0-8%9
 #SBATCH -A inl@a100
 
-# When called directly, submit the two groups sequentially.  --wait ensures
-# that the second array is not submitted while the first one is still present
-# in the dev QoS (which is limited to 10 running + pending jobs per user).
+# Submit groups sequentially, with at most 9 jobs in each array.
+# --wait prevents this launcher from submitting overlapping groups.
 if [ -z "${SLURM_JOB_ID:-}" ]; then
   set -e
   SCRIPT_PATH=$(readlink -f "$0")
   mkdir -p slurm/logs
 
-  echo "Submitting method group 1/2..."
+  echo "Submitting method group 1/3..."
   sbatch --wait --export=ALL,METHOD_GROUP=1 "$SCRIPT_PATH"
 
-  echo "Group 1 finished; submitting method group 2/2..."
+  echo "Group 1 finished; submitting method group 2/3..."
   sbatch --wait --export=ALL,METHOD_GROUP=2 "$SCRIPT_PATH"
 
-  echo "Both method groups finished."
+  echo "Group 2 finished; submitting method group 3/3..."
+  sbatch --wait --array=0-2%3 --export=ALL,METHOD_GROUP=3 "$SCRIPT_PATH"
+
+  echo "All three method groups finished."
   exit 0
 fi
 
@@ -37,20 +39,25 @@ export PYTHONPATH=$PYTHONPATH:$PWD/../..
 case "${METHOD_GROUP:-}" in
   1)
     METHODS=(
-      "baseline"
+      "C-DQN"
+      "BC-DQN"
       "random"
-      "random-0"
     )
     ;;
   2)
     METHODS=(
+      "random-0"
       "als"
       "stagewise-als"
+    )
+    ;;
+  3)
+    METHODS=(
       "gromo_one_layer"
     )
     ;;
   *)
-    echo "Error: METHOD_GROUP must be 1 or 2." >&2
+    echo "Error: METHOD_GROUP must be 1, 2 or 3." >&2
     exit 2
     ;;
 esac
@@ -59,6 +66,11 @@ SEEDS=(95 96 97)
 
 METHOD_INDEX=$((SLURM_ARRAY_TASK_ID / 3))
 SEED_INDEX=$((SLURM_ARRAY_TASK_ID % 3))
+
+if (( METHOD_INDEX < 0 || METHOD_INDEX >= ${#METHODS[@]} )); then
+  echo "Error: array index is out of range for method group $METHOD_GROUP." >&2
+  exit 2
+fi
 
 METHOD=${METHODS[$METHOD_INDEX]}
 SEED=${SEEDS[$SEED_INDEX]}
@@ -70,11 +82,29 @@ mkdir -p "$RUN_DIR"
 
 echo "Run: $RUN_NAME | Group: $METHOD_GROUP | Method: $METHOD | Seed: $SEED"
 
-if [ "$METHOD" = "baseline" ]; then
+COMMON_ARGS=(
+  --use-curriculum
+  --wind-powers 1 5 10 15
+  --n-timesteps 1600000
+  --curriculum-initial-eps 0.2
+  --use-cuda
+  --seed "$SEED"
+)
+
+if [ "$METHOD" = "C-DQN" ] || [ "$METHOD" = "BC-DQN" ]; then
+  BOOSTING_ARG=()
+  HIDDEN_SIZE=128
+  OUTPUT_NAME=dqn_lunarlander_curriculum
+  if [ "$METHOD" = "BC-DQN" ]; then
+    BOOSTING_ARG=(--use-boosting)
+    HIDDEN_SIZE=64
+    OUTPUT_NAME=dqn_lunarlander_boosted_curriculum
+  fi
   python run_dqn.py \
-    --use-cuda \
-    --seed "$SEED" \
-    --output-dir "$RUN_DIR/dqn_lunarlander"
+    "${COMMON_ARGS[@]}" \
+    "${BOOSTING_ARG[@]}" \
+    --hidden-size "$HIDDEN_SIZE" \
+    --output-dir "$RUN_DIR/$OUTPUT_NAME"
 else
   NATURAL_GRADIENT_ARG=()
   PRE_GROWTH_STEPS=0
@@ -84,9 +114,12 @@ else
   fi
 
   python run_grow_lunarlander.py \
-    --use-cuda \
+    "${COMMON_ARGS[@]}" \
+    --curriculum-growth-at-three-quarters \
+    --first-hidden-size 128 \
+    --initial-hidden 62 \
+    --final-hidden 128 \
     "${NATURAL_GRADIENT_ARG[@]}" \
-    --seed "$SEED" \
     --growth-mode "$METHOD" \
     --grow-batch-size 1024 \
     --pre-growth-steps "$PRE_GROWTH_STEPS" \
